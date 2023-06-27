@@ -1,1 +1,23 @@
-{}
+{
+  "focusNewTab": true,
+  "defaultViewMode": "source",
+  "livePreview": false,
+  "readableLineLength": false,
+  "strictLineBreaks": false,
+  "showFrontmatter": true,
+  "foldHeading": true,
+  "foldIndent": true,
+  "showLineNumber": true,
+  "showIndentGuide": true,
+  "rightToLeft": false,
+  "spellcheck": true,
+  "spellcheckLanguages": null,
+  "autoPairBrackets": true,
+  "autoPairMarkdown": true,
+  "smartIndentList": true,
+  "useTab": false,
+  "tabSize": 4,
+  "autoConvertHtml": true,
+  "vimMode": false,
+  "legacyEditor": false
+}
