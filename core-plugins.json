@@ -4,7 +4,6 @@
   "switcher",
   "graph",
   "backlink",
-  "canvas",
   "outgoing-link",
   "tag-pane",
   "page-preview",
@@ -13,7 +12,10 @@
   "note-composer",
   "command-palette",
   "bookmarks",
+  "zk-prefixer",
+  "random-note",
   "outline",
   "word-count",
+  "workspaces",
   "file-recovery"
 ]
