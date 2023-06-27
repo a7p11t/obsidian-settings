@@ -19,5 +19,17 @@
   "tabSize": 4,
   "autoConvertHtml": true,
   "vimMode": false,
-  "legacyEditor": false
+  "legacyEditor": false,
+  "promptDelete": false,
+  "trashOption": "local",
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "2000_Inbox/2100_Notes",
+  "newLinkFormat": "absolute",
+  "useMarkdownLinks": true,
+  "showUnsupportedFiles": true,
+  "attachmentFolderPath": "./xxxx_Attachments",
+  "userIgnoreFilters": [
+    "1000_System"
+  ]
 }
