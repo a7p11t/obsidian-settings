@@ -1,0 +1,5 @@
+# Exclude workspace cache
+workspace.json
+workspace-mobile.json
+
+# Exclude OS settings and caches
