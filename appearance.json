@@ -1,3 +1,12 @@
 {
-  "accentColor": ""
+  "accentColor": "#8b6cef",
+  "theme": "obsidian",
+  "interfaceFontFamily": "Noto Sans JP,游ゴシック",
+  "textFontFamily": "Noto Sans JP,游ゴシック",
+  "monospaceFontFamily": "HackGen",
+  "baseFontSize": 13,
+  "baseFontSizeAction": false,
+  "showViewHeader": true,
+  "nativeMenus": false,
+  "translucency": false
 }

@@ -31,5 +31,6 @@
   "attachmentFolderPath": "./xxxx_Attachments",
   "userIgnoreFilters": [
     "1000_System"
-  ]
+  ],
+  "showInlineTitle": true
 }
