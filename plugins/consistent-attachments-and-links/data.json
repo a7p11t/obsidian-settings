@@ -4,7 +4,7 @@
   "updateLinks": true,
   "deleteEmptyFolders": true,
   "deleteExistFilesWhenMoveNote": true,
-  "changeNoteBacklinksAlt": false,
+  "changeNoteBacklinksAlt": true,
   "ignoreFolders": [
     ".git/",
     ".obsidian/"
@@ -12,7 +12,7 @@
   "ignoreFiles": [
     "consistant-report.md"
   ],
-  "attachmentsSubfolder": "",
-  "consistentReportFile": "consistant-report.md",
+  "attachmentsSubfolder": "_attachments",
+  "consistentReportFile": "1000_System/1200_Outputs/consistant-report.md",
   "useBuiltInObsidianLinkCaching": false
 }
