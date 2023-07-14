@@ -98,5 +98,14 @@
       ],
       "key": "'"
     }
+  ],
+  "consistent-attachments-and-links:reorganize-vault": [
+    {
+      "modifiers": [
+        "Alt",
+        "Shift"
+      ],
+      "key": "R"
+    }
   ]
 }
