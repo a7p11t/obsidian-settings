@@ -107,5 +107,13 @@
       ],
       "key": "R"
     }
+  ],
+  "unique-attachments:rename-all-attachments": [
+    {
+      "modifiers": [
+        "Alt"
+      ],
+      "key": "R"
+    }
   ]
 }
