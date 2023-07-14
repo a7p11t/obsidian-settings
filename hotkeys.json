@@ -90,5 +90,13 @@
       ],
       "key": "O"
     }
+  ],
+  "obsidian-footnotes:insert-autonumbered-footnote": [
+    {
+      "modifiers": [
+        "Mod"
+      ],
+      "key": "'"
+    }
   ]
 }
