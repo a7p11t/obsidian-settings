@@ -8,5 +8,8 @@
   "baseFontSizeAction": false,
   "showViewHeader": true,
   "nativeMenus": false,
-  "translucency": false
+  "translucency": false,
+  "enabledCssSnippets": [
+    "border"
+  ]
 }

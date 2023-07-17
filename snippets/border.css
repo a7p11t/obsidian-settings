@@ -1,0 +1,13 @@
+/* Underline heading in Edit mode and Preview mode */
+.HyperMD-header-1, .markdown-preview-view h1 {
+    border-bottom: 2px solid var(--text-accent);
+}
+
+/* Underline heading in Edit mode and Preview mode */
+.HyperMD-header-2, .markdown-preview-view h2,
+.HyperMD-header-3, .markdown-preview-view h3,
+.HyperMD-header-4, .markdown-preview-view h4,
+.HyperMD-header-5, .markdown-preview-view h5,
+.HyperMD-header-6, .markdown-preview-view h6 {
+    border-bottom: 2px solid var(--hr-color);
+}
