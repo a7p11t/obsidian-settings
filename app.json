@@ -30,7 +30,8 @@
   "showUnsupportedFiles": true,
   "attachmentFolderPath": "./_attachments",
   "userIgnoreFilters": [
-    "1000_System"
+    "1000_System",
+    "9000_Old/"
   ],
   "showInlineTitle": true
 }
