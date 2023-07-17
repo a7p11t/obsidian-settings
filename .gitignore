@@ -2,4 +2,7 @@
 workspace.json
 workspace-mobile.json
 
+# Self-hosted LiveSync setting file
+plugins/obsidian-livesync/data.json
+
 # Exclude OS settings and caches
