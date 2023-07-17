@@ -24,7 +24,7 @@
   "trashOption": "local",
   "alwaysUpdateLinks": true,
   "newFileLocation": "folder",
-  "newFileFolderPath": "2000_Inbox/2100_Notes",
+  "newFileFolderPath": "2000_Inbox",
   "newLinkFormat": "absolute",
   "useMarkdownLinks": true,
   "showUnsupportedFiles": true,
