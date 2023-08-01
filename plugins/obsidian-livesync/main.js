@@ -1755,7 +1755,7 @@ var require_events = __commonJS({
     EventEmitter2.prototype.getMaxListeners = function getMaxListeners() {
       return _getMaxListeners(this);
     };
-    EventEmitter2.prototype.emit = function emit(type) {
+    EventEmitter2.prototype.emit = function emit2(type) {
       var args = [];
       for (var i = 1; i < arguments.length; i++)
         args.push(arguments[i]);
@@ -2993,7 +2993,9 @@ var DEFAULT_SETTINGS = {
   hashCacheMaxAmount: 50,
   concurrencyOfReadChunksOnline: 100,
   minimumIntervalOfReadChunksOnline: 333,
-  hashAlg: "xxhash64"
+  hashAlg: "xxhash64",
+  suspendParseReplicationResult: false,
+  doNotSuspendOnFetching: false
 };
 var PREFIXMD_LOGFILE = "LIVESYNC_LOG_";
 var FLAGMD_REDFLAG = "redflag.md";
@@ -3058,6 +3060,10 @@ var LRUCache = class {
     this.maxCachedLength = (maxCacheLength || 1) * 1e6;
     this.enableReversed = !forwardOnly;
     Logger(`Cache initialized ${this.maxCache} / ${this.maxCachedLength}`, LOG_LEVEL.VERBOSE);
+  }
+  clear() {
+    this.cache.clear();
+    this.revCache.clear();
   }
   has(key) {
     return this.cache.has(key);
@@ -3688,6 +3694,208 @@ async function testCrypt() {
   }
 }
 
+// src/lib/src/store.ts
+var ReadOnlyObservableStore = class {
+};
+var ObservableStore = class extends ReadOnlyObservableStore {
+  constructor(value) {
+    super();
+    this.observers = [];
+    this.interceptors = [];
+    this.value = value;
+  }
+  set(value) {
+    if (this.value != value) {
+      let v = value;
+      if (this.interceptors.length > 0) {
+        for (const f3 of this.interceptors) {
+          v = f3(v);
+        }
+      }
+      this.value = v;
+      this.invalidate();
+    }
+  }
+  apply(func) {
+    this.value = func(this.value);
+    this.invalidate();
+  }
+  peek() {
+    return this.value;
+  }
+  invalidate() {
+    const value = this.value;
+    if (value === void 0)
+      return;
+    const watchers = this.observers;
+    for (const f3 of watchers) {
+      f3(value);
+    }
+  }
+  intercept(interceptor) {
+    this.interceptors.push(interceptor);
+    return () => this.removeInterceptor(interceptor);
+  }
+  removeInterceptor(interceptor) {
+    this.interceptors = this.interceptors.filter((e3) => e3 != interceptor);
+  }
+  observe(observer) {
+    this.observers.push(observer);
+    return () => this.unobserve(observer);
+  }
+  unobserve(observer) {
+    this.observers = this.observers.filter((e3) => e3 != observer);
+  }
+};
+var StreamStore = class extends ObservableStore {
+  constructor(init3) {
+    super(init3 != null ? init3 : []);
+    this.itemInterceptors = [];
+    this.subscribers = [];
+  }
+  push(value) {
+    var _a;
+    let v = value;
+    for (const f3 of this.itemInterceptors) {
+      v = f3(v);
+    }
+    for (const f3 of this.subscribers) {
+      f3(v);
+    }
+    this.set([...(_a = this.value) != null ? _a : [], v]);
+  }
+  pop() {
+    var _a;
+    const v = [...(_a = this.value) != null ? _a : []];
+    const val = v.pop();
+    this.set(v);
+    return val;
+  }
+  unshift(value) {
+    var _a;
+    let v = value;
+    for (const f3 of this.itemInterceptors) {
+      v = f3(v);
+    }
+    for (const f3 of this.subscribers) {
+      f3(v);
+    }
+    this.set([v, ...(_a = this.value) != null ? _a : []]);
+  }
+  shift() {
+    var _a;
+    const [val, ...rest] = [...(_a = this.value) != null ? _a : []];
+    this.set(rest);
+    return val;
+  }
+  subscribe(subscriber) {
+    this.subscribers.push(subscriber);
+    return () => this.unsubscribe(subscriber);
+  }
+  unsubscribe(subscriber) {
+    this.subscribers = this.subscribers.filter((e3) => e3 != subscriber);
+  }
+  interceptEach(interceptor) {
+    this.itemInterceptors.push(interceptor);
+    return () => this.removeEachInterceptor(interceptor);
+  }
+  removeEachInterceptor(interceptor) {
+    this.itemInterceptors = this.itemInterceptors.filter((e3) => e3 != interceptor);
+  }
+};
+var globalStore = /* @__PURE__ */ new Map();
+var globalStream = /* @__PURE__ */ new Map();
+function getGlobalStore(name, init3) {
+  if (!globalStore.has(name)) {
+    globalStore.set(name, new ObservableStore(init3));
+  }
+  return globalStore.get(name);
+}
+function getGlobalStreamStore(name, init3) {
+  if (!globalStream.has(name)) {
+    globalStream.set(name, new StreamStore(init3));
+  }
+  return globalStream.get(name);
+}
+function observeStores(storeA, storeB) {
+  const value = { ...storeA.peek(), ...storeB.peek() };
+  const store = new ObservableStore(value);
+  storeA.observe((value2) => store.apply((e3) => ({ ...e3, ...value2 })));
+  storeB.observe((value2) => store.apply((e3) => ({ ...e3, ...value2 })));
+  return store;
+}
+
+// src/lib/src/stores.ts
+var lockStore = getGlobalStore("locks", { pending: [], running: [], count: 0 });
+var waitingData = getGlobalStore("processingLast", 0);
+var logStore = getGlobalStreamStore("logs", []);
+var logMessageStore = getGlobalStore("logMessage", []);
+
+// src/lib/src/lock.ts
+var externalNotifier = () => {
+};
+var notifyTimer = null;
+function notifyLock() {
+  if (notifyTimer != null) {
+    clearTimeout(notifyTimer);
+  }
+  notifyTimer = setTimeout(() => {
+    externalNotifier();
+  }, 100);
+}
+var Mutexes = {};
+function updateStore() {
+  const allLocks = [...Object.values(Mutexes).map((e3) => e3.peekQueues())].flat();
+  lockStore.apply((v) => ({
+    ...v,
+    count: allLocks.length,
+    pending: allLocks.filter((e3) => e3.state == "NONE").map((e3) => {
+      var _a;
+      return (_a = e3.memo) != null ? _a : "";
+    }),
+    running: allLocks.filter((e3) => e3.state == "RUNNING").map((e3) => {
+      var _a;
+      return (_a = e3.memo) != null ? _a : "";
+    })
+  }));
+}
+var semaphoreReleasedCount = 0;
+async function runWithLock(key, ignoreWhenRunning, proc) {
+  if (semaphoreReleasedCount > 200) {
+    const deleteKeys = [];
+    for (const key2 in Mutexes) {
+      if (Mutexes[key2].peekQueues().length == 0) {
+        deleteKeys.push(key2);
+      }
+    }
+    for (const key2 of deleteKeys) {
+      delete Mutexes[key2];
+    }
+    semaphoreReleasedCount = 0;
+  }
+  if (!(key in Mutexes)) {
+    Mutexes[key] = Semaphore(1, (queue2) => {
+      if (queue2.length == 0)
+        semaphoreReleasedCount++;
+    });
+  }
+  const timeout = ignoreWhenRunning ? 1 : 0;
+  const releaser = await Mutexes[key].tryAcquire(1, timeout, key);
+  updateStore();
+  if (!releaser)
+    return null;
+  try {
+    return await proc();
+  } finally {
+    releaser();
+    notifyLock();
+    updateStore();
+  }
+}
+function isLockAcquired(key) {
+  return key in Mutexes && Mutexes[key].peekQueues().length != 0;
+}
+
 // src/lib/src/path.ts
 function isValidFilenameInWidows(filename) {
   const regex = /[\u0000-\u001f]|[\\":?<>|*#]/g;
@@ -3838,6 +4046,92 @@ function shouldSplitAsPlainText(filename) {
   if (filename.endsWith(".canvas"))
     return true;
   return false;
+}
+
+// src/lib/src/task.ts
+function unwrapTaskResult(result) {
+  if ("ok" in result)
+    return result.ok;
+  if ("err" in result)
+    return result.err;
+  return void 0;
+}
+function isTaskWaiting(task) {
+  if (task instanceof Promise) {
+    return false;
+  }
+  if (task instanceof Function) {
+    return true;
+  }
+  throw new Error("Invalid state");
+}
+async function wrapEachProcess(key, task) {
+  try {
+    const r = await task;
+    return { key, ok: r };
+  } catch (ex) {
+    return { key, err: ex };
+  }
+}
+async function* processAllGeneratorTasksWithConcurrencyLimit(limit, tasks2) {
+  const nowProcessing = /* @__PURE__ */ new Map();
+  let idx = 0;
+  let generatorDone = false;
+  while (nowProcessing.size > 0 || !generatorDone) {
+    L2:
+      while (nowProcessing.size < limit && !generatorDone) {
+        const w = await tasks2.next();
+        if (w.done) {
+          generatorDone = true;
+        }
+        if (w.value === void 0) {
+          break L2;
+        }
+        const task = w.value;
+        idx++;
+        const newProcess = isTaskWaiting(task) ? task() : task;
+        const wrappedPromise = wrapEachProcess(idx, newProcess);
+        nowProcessing.set(idx, wrappedPromise);
+      }
+    const done = await Promise.race(nowProcessing.values());
+    nowProcessing.delete(done.key);
+    yield done;
+  }
+}
+async function* pipeGeneratorToGenerator(generator, callback) {
+  for await (const e3 of generator) {
+    const closure = () => callback(e3);
+    yield closure;
+  }
+}
+async function* processAllTasksWithConcurrencyLimit(limit, tasks2) {
+  const nowProcessing = /* @__PURE__ */ new Map();
+  let idx = 0;
+  const pendingTasks = tasks2.reverse();
+  while (pendingTasks.length > 0 || nowProcessing.size > 0) {
+    L2:
+      while (nowProcessing.size < limit && pendingTasks.length > 0) {
+        const task = pendingTasks.pop();
+        if (task === void 0) {
+          break L2;
+        }
+        idx++;
+        const newProcess = isTaskWaiting(task) ? task() : task;
+        const wrappedPromise = wrapEachProcess(idx, newProcess);
+        nowProcessing.set(idx, wrappedPromise);
+      }
+    const done = await Promise.race(nowProcessing.values());
+    nowProcessing.delete(done.key);
+    yield done;
+  }
+}
+async function mapAllTasksWithConcurrencyLimit(limit, tasks2) {
+  const results = /* @__PURE__ */ new Map();
+  for await (const v of processAllTasksWithConcurrencyLimit(limit, tasks2)) {
+    results.set(v.key, v);
+  }
+  const ret = [...results.entries()].sort((a2, b) => a2[0] - b[0]).map((e3) => e3[1]);
+  return ret;
 }
 
 // src/lib/src/utils_couchdb.ts
@@ -4033,6 +4327,260 @@ var enableEncryption = (db, passphrase, useDynamicIterationCount, migrationDecry
 };
 function isErrorOfMissingDoc(ex) {
   return (ex && (ex == null ? void 0 : ex.status)) == 404;
+}
+async function prepareChunkDesignDoc(db) {
+  var _a;
+  const chunkDesignDoc = {
+    _id: "_design/chunks",
+    _rev: void 0,
+    ver: 2,
+    views: {
+      collectDangling: {
+        map: function(doc) {
+          if (doc._id.startsWith("h:")) {
+            emit([doc._id], 0);
+          } else {
+            if ("children" in doc) {
+              doc.children.forEach((e3) => emit([e3], 1));
+            }
+          }
+        }.toString(),
+        reduce: "_sum"
+      }
+    }
+  };
+  let updateDDoc = false;
+  try {
+    const old = await db.get(chunkDesignDoc._id);
+    if ((_a = old == null ? void 0 : old.ver) != null ? _a : 0 < chunkDesignDoc.ver) {
+      chunkDesignDoc._rev = old._rev;
+      updateDDoc = true;
+    }
+  } catch (ex) {
+    if (ex.status == 404) {
+      updateDDoc = true;
+    } else {
+      Logger(`Failed to make design document for operating chunks`);
+      Logger(ex, LOG_LEVEL.VERBOSE);
+      return false;
+    }
+  }
+  try {
+    if (updateDDoc) {
+      await db.put(chunkDesignDoc);
+    }
+  } catch (ex) {
+    Logger(`Failed to make design document for operating chunks`);
+    Logger(ex, LOG_LEVEL.VERBOSE);
+    return false;
+  }
+  return true;
+}
+async function collectChunksUsage(db) {
+  if (!await prepareChunkDesignDoc(db)) {
+    Logger(`Could not prepare design document for operating chunks`);
+    return [];
+  }
+  const q = await db.query("chunks/collectDangling", { reduce: true, group: true });
+  const rows = q.rows;
+  return rows;
+}
+function collectUnreferencedChunks(db) {
+  return collectChunks(db, "DANGLING");
+}
+async function collectChunks(db, type) {
+  const rows = await collectChunksUsage(db);
+  const rowF = type == "ALL" ? rows : rows.filter((e3) => type == "DANGLING" ? e3.value == 0 : e3.value != 0);
+  const ids = rowF.flatMap((e3) => e3.key);
+  const docs = (await db.allDocs({ keys: ids })).rows;
+  const items = docs.filter((e3) => !("error" in e3)).map((e3) => ({ id: e3.id, rev: e3.value.rev }));
+  return items;
+}
+async function collectUnbalancedChunkIDs(local, remote) {
+  const chunksOnLocal = await collectChunks(local, "INUSE");
+  const chunksOnRemote = await collectChunks(remote, "INUSE");
+  const onlyOnLocal = chunksOnLocal.filter((e3) => !chunksOnRemote.some((ee) => ee.id == e3.id));
+  const onlyOnRemote = chunksOnRemote.filter((e3) => !chunksOnLocal.some((ee) => ee.id == e3.id));
+  return { onlyOnLocal, onlyOnRemote };
+}
+async function purgeChunksLocal(db, docs) {
+  await runWithLock("purge-local", false, async () => {
+    try {
+      Logger(`Purging unused ${docs.length} chunks `, LOG_LEVEL.NOTICE, "purge-local-backup");
+      const batchDocsBackup = arrayToChunkedArray(docs, 100);
+      let total = { ok: 0, exist: 0, error: 0 };
+      for (const docsInBatch of batchDocsBackup) {
+        const backupDocsFrom = await db.allDocs({ keys: docsInBatch.map((e3) => e3.id), include_docs: true });
+        const backupDocs = backupDocsFrom.rows.filter((e3) => "doc" in e3).map((e3) => {
+          const chunk = { ...e3.doc };
+          delete chunk._rev;
+          chunk._id = `_local/${chunk._id}`;
+          return chunk;
+        });
+        const ret = await db.bulkDocs(backupDocs);
+        total = ret.map((e3) => ({
+          ok: "ok" in e3 ? 1 : 0,
+          exist: "status" in e3 && e3.status == 409 ? 1 : 0,
+          error: "status" in e3 && e3.status != 409 ? 1 : 0
+        })).reduce((p, c) => ({ ok: p.ok + c.ok, exist: p.exist + c.exist, error: p.error + c.error }), total);
+        Logger(`Local chunk backed up: new:${total.ok} ,exist:${total.exist}, error:${total.error}`, LOG_LEVEL.NOTICE, "purge-local-backup");
+        const erroredItems = ret.filter((e3) => "error" in e3 && e3.status != 409);
+        for (const item of erroredItems) {
+          Logger(`Failed to back up: ${item.id} / ${item.rev}`, LOG_LEVEL.VERBOSE);
+        }
+      }
+    } catch (ex) {
+      Logger(`Could not back up chunks`);
+      Logger(ex, LOG_LEVEL.VERBOSE);
+    }
+    Logger(`Purging unused ${docs.length} chunks... `, LOG_LEVEL.NOTICE, "purge-local");
+    const batchDocs = arrayToChunkedArray(docs, 100);
+    let totalRemoved = 0;
+    for (const docsInBatch of batchDocs) {
+      const removed = await db.purgeMulti(docsInBatch.map((e3) => [e3.id, e3.rev]));
+      const removedCount = Object.values(removed).filter((e3) => "ok" in e3).length;
+      totalRemoved += removedCount;
+      Logger(`Purging:  ${totalRemoved} / ${docs.length}`, LOG_LEVEL.NOTICE, "purge-local");
+    }
+    Logger(`Purging unused chunks done!: ${totalRemoved} chunks has been deleted.`, LOG_LEVEL.NOTICE, "purge-local");
+  });
+}
+var _requestToCouchDBFetch = async (baseUri, username, password, path, body, method) => {
+  const utf8str = String.fromCharCode.apply(null, new TextEncoder().encode(`${username}:${password}`));
+  const encoded = window.btoa(utf8str);
+  const authHeader = "Basic " + encoded;
+  const transformedHeaders = { authorization: authHeader, "content-type": "application/json" };
+  const uri = `${baseUri}/${path}`;
+  const requestParam = {
+    url: uri,
+    method: method || (body ? "PUT" : "GET"),
+    headers: new Headers(transformedHeaders),
+    contentType: "application/json",
+    body: JSON.stringify(body)
+  };
+  return await fetch(uri, requestParam);
+};
+async function purgeChunksRemote(setting, docs) {
+  await runWithLock("purge-remote", false, async () => {
+    const CHUNK_SIZE = 100;
+    function makeChunkedArrayFromArray(items) {
+      const chunked = [];
+      for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+        chunked.push(items.slice(i, i + CHUNK_SIZE));
+      }
+      return chunked;
+    }
+    const buffer = makeChunkedArrayFromArray(docs);
+    for (const chunkedPayload of buffer) {
+      const rets = await _requestToCouchDBFetch(
+        `${setting.couchDB_URI}/${setting.couchDB_DBNAME}`,
+        setting.couchDB_USER,
+        setting.couchDB_PASSWORD,
+        "_purge",
+        chunkedPayload.reduce((p, c) => ({ ...p, [c.id]: [c.rev] }), {}),
+        "POST"
+      );
+      Logger(JSON.stringify(await rets.json()), LOG_LEVEL.VERBOSE);
+    }
+    return;
+  });
+}
+function sizeToHumanReadable(size) {
+  if (!size)
+    return "-";
+  const i = Math.floor(Math.log(size) / Math.log(1024));
+  return Number.parseInt((size / Math.pow(1024, i)).toFixed(2)) + " " + ["B", "kB", "MB", "GB", "TB"][i];
+}
+async function purgeUnreferencedChunks(db, dryRun, connSetting, performCompact = false) {
+  const info2 = await db.info();
+  let resultCount = 0;
+  const getSize = function(info3, key) {
+    var _a, _b;
+    return Number.parseInt((_b = (_a = info3 == null ? void 0 : info3.sizes) == null ? void 0 : _a[key]) != null ? _b : 0);
+  };
+  const keySuffix = connSetting ? "-remote" : "-local";
+  Logger(`${dryRun ? "Counting" : "Cleaning"} ${connSetting ? "remote" : "local"} database`, LOG_LEVEL.NOTICE);
+  if (connSetting) {
+    Logger(`Database active-size: ${sizeToHumanReadable(getSize(info2, "active"))}, external-size:${sizeToHumanReadable(getSize(info2, "external"))}, file-size: ${sizeToHumanReadable(getSize(info2, "file"))}`, LOG_LEVEL.NOTICE);
+  }
+  Logger(`Collecting unreferenced chunks on ${info2.db_name}`, LOG_LEVEL.NOTICE, "gc-countchunk" + keySuffix);
+  const chunks = await collectUnreferencedChunks(db);
+  resultCount = chunks.length;
+  if (chunks.length == 0) {
+    Logger(`No unreferenced chunks! ${info2.db_name}`, LOG_LEVEL.NOTICE, "gc-countchunk" + keySuffix);
+  } else {
+    Logger(`Number of unreferenced chunks on ${info2.db_name}: ${chunks.length}`, LOG_LEVEL.NOTICE, "gc-countchunk" + keySuffix);
+    if (dryRun) {
+      Logger(`DryRun of cleaning ${connSetting ? "remote" : "local"} database up: Done`, LOG_LEVEL.NOTICE);
+      return resultCount;
+    }
+    if (connSetting) {
+      Logger(`Cleaning unreferenced chunks on remote`, LOG_LEVEL.NOTICE, "gc-purge" + keySuffix);
+      await purgeChunksRemote(connSetting, chunks);
+    } else {
+      Logger(`Cleaning unreferenced chunks on local`, LOG_LEVEL.NOTICE, "gc-purge" + keySuffix);
+      await purgeChunksLocal(db, chunks);
+    }
+    Logger(`Cleaning unreferenced chunks done!`, LOG_LEVEL.NOTICE, "gc-purge" + keySuffix);
+  }
+  if (performCompact) {
+    Logger(`Compacting database...`, LOG_LEVEL.NOTICE, "gc-compact" + keySuffix);
+    await db.compact();
+    Logger(`Compacting database done`, LOG_LEVEL.NOTICE, "gc-compact" + keySuffix);
+  }
+  if (connSetting) {
+    const endInfo = await db.info();
+    Logger(`Processed database active-size: ${sizeToHumanReadable(getSize(endInfo, "active"))}, external-size:${sizeToHumanReadable(getSize(endInfo, "external"))}, file-size: ${sizeToHumanReadable(getSize(endInfo, "file"))}`, LOG_LEVEL.NOTICE);
+    Logger(`Reduced sizes: active-size: ${sizeToHumanReadable(getSize(info2, "active") - getSize(endInfo, "active"))}, external-size:${sizeToHumanReadable(getSize(info2, "external") - getSize(endInfo, "external"))}, file-size: ${sizeToHumanReadable(getSize(info2, "file") - getSize(endInfo, "file"))}`, LOG_LEVEL.NOTICE);
+  }
+  Logger(`Cleaning ${connSetting ? "remote" : "local"} database up: Done`, LOG_LEVEL.NOTICE);
+  return resultCount;
+}
+function transferChunks(key, dispKey, dbFrom, dbTo, items) {
+  const itemsChunked = arrayToChunkedArray(items, 25);
+  let totalProcessed = 0;
+  const total = items.length;
+  const tasks2 = [...itemsChunked].map((batched) => async () => {
+    const processedItems = batched.length;
+    try {
+      const docs = await dbFrom.allDocs({ keys: batched.map((e3) => e3.id), include_docs: true });
+      const docsToSend = docs.rows.filter((e3) => !("error" in e3)).map((e3) => e3.doc);
+      await dbTo.bulkDocs(docsToSend, { new_edits: false });
+    } catch (ex) {
+      Logger(`${dispKey}: Something went wrong on balancing`, LOG_LEVEL.NOTICE);
+      Logger(ex, LOG_LEVEL.VERBOSE);
+    } finally {
+      totalProcessed += processedItems;
+      Logger(`${dispKey}: ${totalProcessed} / ${total}`, LOG_LEVEL.NOTICE, "balance-" + key);
+    }
+  });
+  return tasks2;
+}
+async function balanceChunkPurgedDBs(local, remote) {
+  Logger(`Complement missing chunks between databases`, LOG_LEVEL.NOTICE);
+  try {
+    const { onlyOnLocal, onlyOnRemote } = await collectUnbalancedChunkIDs(local, remote);
+    const localToRemote = transferChunks("l2r", "local -> remote", local, remote, onlyOnLocal);
+    const remoteToLocal = transferChunks("r2l", "remote -> local", remote, local, onlyOnRemote);
+    await mapAllTasksWithConcurrencyLimit(6, [...localToRemote, ...remoteToLocal]);
+    Logger(`local -> remote: Done`, LOG_LEVEL.NOTICE, "balance-l2r");
+    Logger(`remote -> local: Done`, LOG_LEVEL.NOTICE, "balance-r2l");
+  } catch (ex) {
+    Logger("Something went wrong on balancing!", LOG_LEVEL.NOTICE);
+    Logger(ex, LOG_LEVEL.VERBOSE);
+  }
+  Logger("Complement completed!", LOG_LEVEL.NOTICE);
+}
+async function fetchAllUsedChunks(local, remote) {
+  try {
+    const chunksOnRemote = await collectChunks(remote, "INUSE");
+    const remoteToLocal = transferChunks("r2l", "remote -> local", remote, local, chunksOnRemote);
+    await mapAllTasksWithConcurrencyLimit(3, remoteToLocal);
+    Logger(`remote -> local: Done`, LOG_LEVEL.NOTICE, "balance-r2l");
+  } catch (ex) {
+    Logger("Something went wrong on balancing!", LOG_LEVEL.NOTICE);
+    Logger(ex, LOG_LEVEL.VERBOSE);
+  }
 }
 
 // src/lib/src/utils.ts
@@ -12378,14 +12926,14 @@ function createAbstractMapReduce(localDocName2, mapper3, reducer3, ddocValidator
     let mapResults;
     let doc;
     let taskId;
-    function emit(key, value) {
+    function emit2(key, value) {
       const output = { id: doc._id, key: normalizeKey(key) };
       if (typeof value !== "undefined" && value !== null) {
         output.value = normalizeKey(value);
       }
       mapResults.push(output);
     }
-    const mapFun = mapper3(view.mapFun, emit);
+    const mapFun = mapper3(view.mapFun, emit2);
     let currentSeq = view.seq || 0;
     function createTask() {
       return view.sourceDB.info().then(function(info2) {
@@ -12921,11 +13469,11 @@ function sum(values) {
 var log = guardedConsole.bind(null, "log");
 var isArray = Array.isArray;
 var toJSON = JSON.parse;
-function evalFunctionWithEval(func, emit) {
+function evalFunctionWithEval(func, emit2) {
   return scopeEval(
     "return (" + func.replace(/;\s*$/, "") + ");",
     {
-      emit,
+      emit: emit2,
       sum,
       log,
       isArray,
@@ -12969,14 +13517,14 @@ function getBuiltIn(reduceFunString) {
     throw new Error(reduceFunString + " is not a supported reduce function.");
   }
 }
-function mapper(mapFun, emit) {
+function mapper(mapFun, emit2) {
   if (typeof mapFun === "function" && mapFun.length === 2) {
     var origMap = mapFun;
     return function(doc) {
-      return origMap(doc, emit);
+      return origMap(doc, emit2);
     };
   } else {
-    return evalFunctionWithEval(mapFun.toString(), emit);
+    return evalFunctionWithEval(mapFun.toString(), emit2);
   }
 }
 function reducer(reduceFun) {
@@ -14390,7 +14938,7 @@ function uniq2(arr) {
     return key.substring(1);
   });
 }
-function createDeepMultiMapper(fields, emit, selector) {
+function createDeepMultiMapper(fields, emit2, selector) {
   return function(doc) {
     if (selector && !matchesSelector(doc, selector)) {
       return;
@@ -14408,10 +14956,10 @@ function createDeepMultiMapper(fields, emit, selector) {
       }
       toEmit.push(value);
     }
-    emit(toEmit);
+    emit2(toEmit);
   };
 }
-function createDeepSingleMapper(field, emit, selector) {
+function createDeepSingleMapper(field, emit2, selector) {
   var parsedField = parseField(field);
   return function(doc) {
     if (selector && !matchesSelector(doc, selector)) {
@@ -14425,18 +14973,18 @@ function createDeepSingleMapper(field, emit, selector) {
         return;
       }
     }
-    emit(value);
+    emit2(value);
   };
 }
-function createShallowSingleMapper(field, emit, selector) {
+function createShallowSingleMapper(field, emit2, selector) {
   return function(doc) {
     if (selector && !matchesSelector(doc, selector)) {
       return;
     }
-    emit(doc[field]);
+    emit2(doc[field]);
   };
 }
-function createShallowMultiMapper(fields, emit, selector) {
+function createShallowMultiMapper(fields, emit2, selector) {
   return function(doc) {
     if (selector && !matchesSelector(doc, selector)) {
       return;
@@ -14445,7 +14993,7 @@ function createShallowMultiMapper(fields, emit, selector) {
     for (var i = 0, len = fields.length; i < len; i++) {
       toEmit.push(doc[fields[i]]);
     }
-    emit(toEmit);
+    emit2(toEmit);
   };
 }
 function checkShallow(fields) {
@@ -14457,27 +15005,27 @@ function checkShallow(fields) {
   }
   return true;
 }
-function createMapper(fields, emit, selector) {
+function createMapper(fields, emit2, selector) {
   var isShallow = checkShallow(fields);
   var isSingle = fields.length === 1;
   if (isShallow) {
     if (isSingle) {
-      return createShallowSingleMapper(fields[0], emit, selector);
+      return createShallowSingleMapper(fields[0], emit2, selector);
     } else {
-      return createShallowMultiMapper(fields, emit, selector);
+      return createShallowMultiMapper(fields, emit2, selector);
     }
   } else {
     if (isSingle) {
-      return createDeepSingleMapper(fields[0], emit, selector);
+      return createDeepSingleMapper(fields[0], emit2, selector);
     } else {
-      return createDeepMultiMapper(fields, emit, selector);
+      return createDeepMultiMapper(fields, emit2, selector);
     }
   }
 }
-function mapper2(mapFunDef, emit) {
+function mapper2(mapFunDef, emit2) {
   const fields = Object.keys(mapFunDef.fields);
   const partialSelector = mapFunDef.partial_filter_selector;
-  return createMapper(fields, emit, partialSelector);
+  return createMapper(fields, emit2, partialSelector);
 }
 function reducer2() {
   throw new Error("reduce not supported");
@@ -15297,6 +15845,77 @@ var index_browser_es_default3 = plugin;
 // src/lib/src/pouchdb-browser.ts
 var import_transform_pouch = __toESM(require_transform_pouch(), 1);
 index_es_default.plugin(index_es_default2).plugin(index_es_default3).plugin(index_es_default4).plugin(index_browser_es_default2).plugin(index_es_default8).plugin(index_browser_es_default3).plugin(import_transform_pouch.default);
+function appendPurgeSeqs(db, docs) {
+  return db.get("_local/purges").then(function(doc) {
+    for (const [docId, rev$$1] of docs) {
+      const purgeSeq = doc.purgeSeq + 1;
+      doc.purges.push({
+        docId,
+        rev: rev$$1,
+        purgeSeq
+      });
+      if (doc.purges.length > db.purged_infos_limit) {
+        doc.purges.splice(0, doc.purges.length - db.purged_infos_limit);
+      }
+      doc.purgeSeq = purgeSeq;
+    }
+    return doc;
+  }).catch(function(err) {
+    if (err.status !== 404) {
+      throw err;
+    }
+    return {
+      _id: "_local/purges",
+      purges: docs.map(([docId, rev$$1], idx) => ({
+        docId,
+        rev: rev$$1,
+        purgeSeq: idx
+      })),
+      purgeSeq: docs.length
+    };
+  }).then(function(doc) {
+    return db.put(doc);
+  });
+}
+index_es_default.prototype.purgeMulti = adapterFun("_purgeMulti", function(docs, callback) {
+  if (typeof this._purge === "undefined") {
+    return callback(createError(UNKNOWN_ERROR, "Purge is not implemented in the " + this.adapter + " adapter."));
+  }
+  const self2 = this;
+  const tasks2 = docs.map(
+    (param) => () => new Promise((res2, rej) => {
+      const [docId, rev$$1] = param;
+      self2._getRevisionTree(docId, (error, revs) => {
+        if (error) {
+          return res2([param, error]);
+        }
+        if (!revs) {
+          return res2([param, createError(MISSING_DOC)]);
+        }
+        let path;
+        try {
+          path = findPathToLeaf(revs, rev$$1);
+        } catch (error2) {
+          return res2([param, error2.message || error2]);
+        }
+        self2._purge(docId, path, (error2, result) => {
+          if (error2) {
+            return res2([param, error2]);
+          } else {
+            return res2([param, result]);
+          }
+        });
+      });
+    })
+  );
+  (async () => {
+    const ret = await mapAllTasksWithConcurrencyLimit(1, tasks2);
+    const retAll = ret.map((e3) => unwrapTaskResult(e3));
+    await appendPurgeSeqs(self2, retAll.filter((e3) => "ok" in e3[1]).map((e3) => e3[0]));
+    const result = retAll.map((e3) => ({ [e3[0][0]]: e3[1] })).reduce((p, c) => ({ ...p, ...c }), {});
+    return result;
+  })().then((result) => callback(void 0, result)).catch((error) => callback(error));
+});
 
 // src/ConflictResolveModal.ts
 var import_diff_match_patch2 = __toESM(require_diff_match_patch(), 1);
@@ -15319,11 +15938,11 @@ var ConflictResolveModal = class extends import_obsidian.Modal {
       const x1 = v[0];
       const x2 = v[1];
       if (x1 == import_diff_match_patch2.DIFF_DELETE) {
-        diff += "<span class='deleted'>" + escapeStringToHTML(x2) + "</span>";
+        diff += "<span class='deleted'>" + escapeStringToHTML(x2).replace(/\n/g, "<span class='ls-mark-cr'></span>\n") + "</span>";
       } else if (x1 == import_diff_match_patch2.DIFF_EQUAL) {
-        diff += "<span class='normal'>" + escapeStringToHTML(x2) + "</span>";
+        diff += "<span class='normal'>" + escapeStringToHTML(x2).replace(/\n/g, "<span class='ls-mark-cr'></span>\n") + "</span>";
       } else if (x1 == import_diff_match_patch2.DIFF_INSERT) {
-        diff += "<span class='added'>" + escapeStringToHTML(x2) + "</span>";
+        diff += "<span class='added'>" + escapeStringToHTML(x2).replace(/\n/g, "<span class='ls-mark-cr'></span>\n") + "</span>";
       }
     }
     diff = diff.replace(/\n/g, "<br>");
@@ -15336,23 +15955,26 @@ var ConflictResolveModal = class extends import_obsidian.Modal {
         `;
     contentEl.createEl("button", { text: "Keep A" }, (e3) => {
       e3.addEventListener("click", async () => {
-        await this.callback(this.result.right.rev);
+        const callback = this.callback;
         this.callback = null;
         this.close();
+        await callback(this.result.right.rev);
       });
     });
     contentEl.createEl("button", { text: "Keep B" }, (e3) => {
       e3.addEventListener("click", async () => {
-        await this.callback(this.result.left.rev);
+        const callback = this.callback;
         this.callback = null;
         this.close();
+        await callback(this.result.left.rev);
       });
     });
     contentEl.createEl("button", { text: "Concat both" }, (e3) => {
       e3.addEventListener("click", async () => {
-        await this.callback("");
+        const callback = this.callback;
         this.callback = null;
         this.close();
+        await callback("");
       });
     });
     contentEl.createEl("button", { text: "Not now" }, (e3) => {
@@ -15930,205 +16552,6 @@ function writable(value, start = noop) {
     };
   }
   return { set, update: update2, subscribe: subscribe2 };
-}
-
-// src/lib/src/store.ts
-var ReadOnlyObservableStore = class {
-};
-var ObservableStore = class extends ReadOnlyObservableStore {
-  constructor(value) {
-    super();
-    this.observers = [];
-    this.interceptors = [];
-    this.value = value;
-  }
-  set(value) {
-    if (this.value != value) {
-      let v = value;
-      if (this.interceptors.length > 0) {
-        for (const f3 of this.interceptors) {
-          v = f3(v);
-        }
-      }
-      this.value = v;
-      this.invalidate();
-    }
-  }
-  apply(func) {
-    this.value = func(this.value);
-    this.invalidate();
-  }
-  peek() {
-    return this.value;
-  }
-  invalidate() {
-    const value = this.value;
-    if (value === void 0)
-      return;
-    const watchers = this.observers;
-    for (const f3 of watchers) {
-      f3(value);
-    }
-  }
-  intercept(interceptor) {
-    this.interceptors.push(interceptor);
-    return () => this.removeInterceptor(interceptor);
-  }
-  removeInterceptor(interceptor) {
-    this.interceptors = this.interceptors.filter((e3) => e3 != interceptor);
-  }
-  observe(observer) {
-    this.observers.push(observer);
-    return () => this.unobserve(observer);
-  }
-  unobserve(observer) {
-    this.observers = this.observers.filter((e3) => e3 != observer);
-  }
-};
-var StreamStore = class extends ObservableStore {
-  constructor(init3) {
-    super(init3 != null ? init3 : []);
-    this.itemInterceptors = [];
-    this.subscribers = [];
-  }
-  push(value) {
-    var _a;
-    let v = value;
-    for (const f3 of this.itemInterceptors) {
-      v = f3(v);
-    }
-    for (const f3 of this.subscribers) {
-      f3(v);
-    }
-    this.set([...(_a = this.value) != null ? _a : [], v]);
-  }
-  pop() {
-    var _a;
-    const v = [...(_a = this.value) != null ? _a : []];
-    const val = v.pop();
-    this.set(v);
-    return val;
-  }
-  unshift(value) {
-    var _a;
-    let v = value;
-    for (const f3 of this.itemInterceptors) {
-      v = f3(v);
-    }
-    for (const f3 of this.subscribers) {
-      f3(v);
-    }
-    this.set([v, ...(_a = this.value) != null ? _a : []]);
-  }
-  shift() {
-    var _a;
-    const [val, ...rest] = [...(_a = this.value) != null ? _a : []];
-    this.set(rest);
-    return val;
-  }
-  subscribe(subscriber) {
-    this.subscribers.push(subscriber);
-    return () => this.unsubscribe(subscriber);
-  }
-  unsubscribe(subscriber) {
-    this.subscribers = this.subscribers.filter((e3) => e3 != subscriber);
-  }
-  interceptEach(interceptor) {
-    this.itemInterceptors.push(interceptor);
-    return () => this.removeEachInterceptor(interceptor);
-  }
-  removeEachInterceptor(interceptor) {
-    this.itemInterceptors = this.itemInterceptors.filter((e3) => e3 != interceptor);
-  }
-};
-var globalStore = /* @__PURE__ */ new Map();
-var globalStream = /* @__PURE__ */ new Map();
-function getGlobalStore(name, init3) {
-  if (!globalStore.has(name)) {
-    globalStore.set(name, new ObservableStore(init3));
-  }
-  return globalStore.get(name);
-}
-function getGlobalStreamStore(name, init3) {
-  if (!globalStream.has(name)) {
-    globalStream.set(name, new StreamStore(init3));
-  }
-  return globalStream.get(name);
-}
-function observeStores(storeA, storeB) {
-  const value = { ...storeA.peek(), ...storeB.peek() };
-  const store = new ObservableStore(value);
-  storeA.observe((value2) => store.apply((e3) => ({ ...e3, ...value2 })));
-  storeB.observe((value2) => store.apply((e3) => ({ ...e3, ...value2 })));
-  return store;
-}
-
-// src/lib/src/stores.ts
-var lockStore = getGlobalStore("locks", { pending: [], running: [], count: 0 });
-var waitingData = getGlobalStore("processingLast", 0);
-var logStore = getGlobalStreamStore("logs", []);
-var logMessageStore = getGlobalStore("logMessage", []);
-
-// src/lib/src/lock.ts
-var externalNotifier = () => {
-};
-var notifyTimer = null;
-function notifyLock() {
-  if (notifyTimer != null) {
-    clearTimeout(notifyTimer);
-  }
-  notifyTimer = setTimeout(() => {
-    externalNotifier();
-  }, 100);
-}
-var Mutexes = {};
-function updateStore() {
-  const allLocks = [...Object.values(Mutexes).map((e3) => e3.peekQueues())].flat();
-  lockStore.apply((v) => ({
-    ...v,
-    count: allLocks.length,
-    pending: allLocks.filter((e3) => e3.state == "NONE").map((e3) => {
-      var _a;
-      return (_a = e3.memo) != null ? _a : "";
-    }),
-    running: allLocks.filter((e3) => e3.state == "RUNNING").map((e3) => {
-      var _a;
-      return (_a = e3.memo) != null ? _a : "";
-    })
-  }));
-}
-var semaphoreReleasedCount = 0;
-async function runWithLock(key, ignoreWhenRunning, proc) {
-  if (semaphoreReleasedCount > 200) {
-    const deleteKeys = [];
-    for (const key2 in Mutexes) {
-      if (Mutexes[key2].peekQueues().length == 0) {
-        deleteKeys.push(key2);
-      }
-    }
-    for (const key2 of deleteKeys) {
-      delete Mutexes[key2];
-    }
-    semaphoreReleasedCount = 0;
-  }
-  if (!(key in Mutexes)) {
-    Mutexes[key] = Semaphore(1, (queue2) => {
-      if (queue2.length == 0)
-        semaphoreReleasedCount++;
-    });
-  }
-  const timeout = ignoreWhenRunning ? 1 : 0;
-  const releaser = await Mutexes[key].tryAcquire(1, timeout, key);
-  updateStore();
-  if (!releaser)
-    return null;
-  try {
-    return await proc();
-  } finally {
-    releaser();
-    notifyLock();
-    updateStore();
-  }
 }
 
 // src/LiveSyncCommands.ts
@@ -16971,85 +17394,6 @@ var JsonResolveModal = class extends import_obsidian.Modal {
     }
   }
 };
-
-// src/lib/src/task.ts
-function isTaskWaiting(task) {
-  if (task instanceof Promise) {
-    return false;
-  }
-  if (task instanceof Function) {
-    return true;
-  }
-  throw new Error("Invalid state");
-}
-async function wrapEachProcess(key, task) {
-  try {
-    const r = await task;
-    return { key, ok: r };
-  } catch (ex) {
-    return { key, err: ex };
-  }
-}
-async function* processAllGeneratorTasksWithConcurrencyLimit(limit, tasks2) {
-  const nowProcessing = /* @__PURE__ */ new Map();
-  let idx = 0;
-  let generatorDone = false;
-  while (nowProcessing.size > 0 || !generatorDone) {
-    L2:
-      while (nowProcessing.size < limit && !generatorDone) {
-        const w = await tasks2.next();
-        if (w.done) {
-          generatorDone = true;
-        }
-        if (w.value === void 0) {
-          break L2;
-        }
-        const task = w.value;
-        idx++;
-        const newProcess = isTaskWaiting(task) ? task() : task;
-        const wrappedPromise = wrapEachProcess(idx, newProcess);
-        nowProcessing.set(idx, wrappedPromise);
-      }
-    const done = await Promise.race(nowProcessing.values());
-    nowProcessing.delete(done.key);
-    yield done;
-  }
-}
-async function* pipeGeneratorToGenerator(generator, callback) {
-  for await (const e3 of generator) {
-    const closure = () => callback(e3);
-    yield closure;
-  }
-}
-async function* processAllTasksWithConcurrencyLimit(limit, tasks2) {
-  const nowProcessing = /* @__PURE__ */ new Map();
-  let idx = 0;
-  const pendingTasks = tasks2.reverse();
-  while (pendingTasks.length > 0 || nowProcessing.size > 0) {
-    L2:
-      while (nowProcessing.size < limit && pendingTasks.length > 0) {
-        const task = pendingTasks.pop();
-        if (task === void 0) {
-          break L2;
-        }
-        idx++;
-        const newProcess = isTaskWaiting(task) ? task() : task;
-        const wrappedPromise = wrapEachProcess(idx, newProcess);
-        nowProcessing.set(idx, wrappedPromise);
-      }
-    const done = await Promise.race(nowProcessing.values());
-    nowProcessing.delete(done.key);
-    yield done;
-  }
-}
-async function mapAllTasksWithConcurrencyLimit(limit, tasks2) {
-  const results = /* @__PURE__ */ new Map();
-  for await (const v of processAllTasksWithConcurrencyLimit(limit, tasks2)) {
-    results.set(v.key, v);
-  }
-  const ret = [...results.entries()].sort((a2, b) => a2[0] - b[0]).map((e3) => e3[1]);
-  return ret;
-}
 
 // src/CmdConfigSync.ts
 function serialize(obj) {
@@ -19558,7 +19902,7 @@ var MessageBox = class extends import_obsidian.Modal {
     });
     contentEl.createEl("h1", { text: this.title });
     const div = contentEl.createDiv();
-    import_obsidian.MarkdownRenderer.renderMarkdown(this.contentMd, div, "/", null);
+    import_obsidian.MarkdownRenderer.renderMarkdown(this.contentMd, div, "/", this.plugin);
     const buttonSetting = new import_obsidian.Setting(contentEl);
     for (const button of this.buttons) {
       buttonSetting.addButton(
@@ -19944,35 +20288,15 @@ var PeriodicProcessor = class {
     this.disable();
     if (interval == 0)
       return;
-    this._timer = window.setInterval(() => this._process().then(() => {
+    this._timer = window.setInterval(() => this.process().then(() => {
     }), interval);
     this._plugin.registerInterval(this._timer);
   }
   disable() {
-    if (this._timer)
-      clearInterval(this._timer);
+    if (this._timer !== void 0)
+      window.clearInterval(this._timer);
+    this._timer = void 0;
   }
-};
-function sizeToHumanReadable(size) {
-  if (!size)
-    return "-";
-  const i = Math.floor(Math.log(size) / Math.log(1024));
-  return Number.parseInt((size / Math.pow(1024, i)).toFixed(2)) + " " + ["B", "kB", "MB", "GB", "TB"][i];
-}
-var _requestToCouchDBFetch = async (baseUri, username, password, path, body, method) => {
-  const utf8str = String.fromCharCode.apply(null, new TextEncoder().encode(`${username}:${password}`));
-  const encoded = window.btoa(utf8str);
-  const authHeader = "Basic " + encoded;
-  const transformedHeaders = { authorization: authHeader, "content-type": "application/json" };
-  const uri = `${baseUri}/${path}`;
-  const requestParam = {
-    url: uri,
-    method: method || (body ? "PUT" : "GET"),
-    headers: new Headers(transformedHeaders),
-    contentType: "application/json",
-    body: JSON.stringify(body)
-  };
-  return await fetch(uri, requestParam);
 };
 var _requestToCouchDB = async (baseUri, username, password, origin2, path, body, method) => {
   const utf8str = String.fromCharCode.apply(null, new TextEncoder().encode(`${username}:${password}`));
@@ -20004,234 +20328,6 @@ async function performRebuildDB(plugin2, method) {
     await plugin2.addOnSetup.rebuildEverything();
   }
 }
-var gatherChunkUsage = async (db) => {
-  const used = /* @__PURE__ */ new Map();
-  const unreferenced = /* @__PURE__ */ new Map();
-  const removed = /* @__PURE__ */ new Map();
-  const missing = /* @__PURE__ */ new Map();
-  const xx = await db.allDocs({ startkey: "h:", endkey: `h:\u{10FFFF}` });
-  for (const xxd of xx.rows) {
-    const chunk = xxd.id;
-    unreferenced.set(chunk, xxd.value.rev);
-  }
-  const x = await db.find({ limit: 999999999, selector: { children: { $exists: true, $type: "array" } }, fields: ["_id", "path", "mtime", "children"] });
-  for (const temp of x.docs) {
-    for (const chunk of temp.children) {
-      used.set(chunk, (used.has(chunk) ? used.get(chunk) : 0) + 1);
-      if (unreferenced.has(chunk)) {
-        removed.set(chunk, unreferenced.get(chunk));
-        unreferenced.delete(chunk);
-      } else {
-        if (!removed.has(chunk)) {
-          if (!missing.has(temp._id)) {
-            missing.set(temp._id, []);
-          }
-          missing.get(temp._id).push(chunk);
-        }
-      }
-    }
-  }
-  return { used, unreferenced, missing };
-};
-var localDatabaseCleanUp = async (plugin2, force, dryRun) => {
-  await runWithLock("clean-up:local", true, async () => {
-    const db = plugin2.localDatabase.localDatabase;
-    if ((db == null ? void 0 : db.adapter) != "indexeddb") {
-      if (force && !dryRun) {
-        Logger("Fetch from the remote database", LOG_LEVEL.NOTICE, "clean-up-db");
-        await performRebuildDB(plugin2, "localOnly");
-        return;
-      } else {
-        Logger("This feature requires disabling `Use an old adapter for compatibility`.", LOG_LEVEL.NOTICE, "clean-up-db");
-        return;
-      }
-    }
-    Logger(`The remote database has been locked for garbage collection`, LOG_LEVEL.NOTICE, "clean-up-db");
-    Logger(`Gathering chunk usage information`, LOG_LEVEL.NOTICE, "clean-up-db");
-    const { unreferenced, missing } = await gatherChunkUsage(db);
-    if (missing.size != 0) {
-      Logger(`Some chunks are not found! We have to rescue`, LOG_LEVEL.NOTICE);
-      Logger(missing, LOG_LEVEL.VERBOSE);
-    } else {
-      Logger(`All chunks are OK`, LOG_LEVEL.NOTICE);
-    }
-    const payload = {};
-    for (const [id, rev2] of unreferenced) {
-      payload[id] = [rev2];
-    }
-    const removeItems = Object.keys(payload).length;
-    if (removeItems == 0) {
-      Logger(`No unreferenced chunks found (Local)`, LOG_LEVEL.NOTICE);
-      await plugin2.markRemoteResolved();
-    }
-    if (dryRun) {
-      Logger(`There are ${removeItems} unreferenced chunks (Local)`, LOG_LEVEL.NOTICE);
-      return;
-    }
-    Logger(`Deleting unreferenced chunks: ${removeItems}`, LOG_LEVEL.NOTICE, "clean-up-db");
-    for (const [id, rev2] of unreferenced) {
-      const ret = await db.purge(id, rev2);
-      Logger(ret, LOG_LEVEL.VERBOSE);
-    }
-    plugin2.localDatabase.refreshSettings();
-    Logger(`Compacting local database...`, LOG_LEVEL.NOTICE, "clean-up-db");
-    await db.compact();
-    await plugin2.markRemoteResolved();
-    Logger("Done!", LOG_LEVEL.NOTICE, "clean-up-db");
-  });
-};
-var balanceChunks = async (plugin2, dryRun) => {
-  await runWithLock("clean-up:balance", true, async () => {
-    const localDB = plugin2.localDatabase.localDatabase;
-    Logger(`Gathering chunk usage information`, LOG_LEVEL.NOTICE, "clean-up-db");
-    const ret = await plugin2.replicator.connectRemoteCouchDBWithSetting(plugin2.settings, plugin2.isMobile);
-    if (typeof ret === "string") {
-      Logger(`Connect error: ${ret}`, LOG_LEVEL.NOTICE, "clean-up-db");
-      return;
-    }
-    const localChunks = /* @__PURE__ */ new Map();
-    const xx = await localDB.allDocs({ startkey: "h:", endkey: `h:\u{10FFFF}` });
-    for (const xxd of xx.rows) {
-      const chunk = xxd.id;
-      localChunks.set(chunk, xxd.value.rev);
-    }
-    const remoteDB = ret.db;
-    const remoteChunks = /* @__PURE__ */ new Map();
-    const xxr = await remoteDB.allDocs({ startkey: "h:", endkey: `h:\u{10FFFF}` });
-    for (const xxd of xxr.rows) {
-      const chunk = xxd.id;
-      remoteChunks.set(chunk, xxd.value.rev);
-    }
-    const localToRemote = new Map([...localChunks]);
-    const remoteToLocal = new Map([...remoteChunks]);
-    for (const id of /* @__PURE__ */ new Set([...localChunks.keys(), ...remoteChunks.keys()])) {
-      if (remoteChunks.has(id)) {
-        localToRemote.delete(id);
-      }
-      if (localChunks.has(id)) {
-        remoteToLocal.delete(id);
-      }
-    }
-    function arrayToChunkedArray2(src, size = 25) {
-      const ret2 = [];
-      let i = 0;
-      while (i < src.length) {
-        ret2.push(src.slice(i, i += size));
-      }
-      return ret2;
-    }
-    if (localToRemote.size == 0) {
-      Logger(`No chunks need to be sent`, LOG_LEVEL.NOTICE);
-    } else {
-      Logger(`${localToRemote.size} chunks need to be sent`, LOG_LEVEL.NOTICE);
-      if (!dryRun) {
-        const w = arrayToChunkedArray2([...localToRemote]);
-        for (const chunk of w) {
-          for (const [id] of chunk) {
-            const queryRet = await localDB.allDocs({ keys: [id], include_docs: true });
-            const docs = queryRet.rows.filter((e3) => !("error" in e3)).map((x) => x.doc);
-            const ret2 = await remoteDB.bulkDocs(docs, { new_edits: false });
-            Logger(ret2, LOG_LEVEL.VERBOSE);
-          }
-        }
-        Logger(`Done! ${remoteToLocal.size} chunks have been sent`, LOG_LEVEL.NOTICE);
-      }
-    }
-    if (remoteToLocal.size == 0) {
-      Logger(`No chunks need to be retrieved`, LOG_LEVEL.NOTICE);
-    } else {
-      Logger(`${remoteToLocal.size} chunks need to be retrieved`, LOG_LEVEL.NOTICE);
-      if (!dryRun) {
-        const w = arrayToChunkedArray2([...remoteToLocal]);
-        for (const chunk of w) {
-          for (const [id] of chunk) {
-            const queryRet = await remoteDB.allDocs({ keys: [id], include_docs: true });
-            const docs = queryRet.rows.filter((e3) => !("error" in e3)).map((x) => x.doc);
-            const ret2 = await localDB.bulkDocs(docs, { new_edits: false });
-            Logger(ret2, LOG_LEVEL.VERBOSE);
-          }
-        }
-        Logger(`Done! ${remoteToLocal.size} chunks have been retrieved`, LOG_LEVEL.NOTICE);
-      }
-    }
-  });
-};
-var remoteDatabaseCleanup = async (plugin2, dryRun) => {
-  const getSize = function(info2, key) {
-    var _a, _b;
-    return Number.parseInt((_b = (_a = info2 == null ? void 0 : info2.sizes) == null ? void 0 : _a[key]) != null ? _b : 0);
-  };
-  await runWithLock("clean-up:remote", true, async () => {
-    const CHUNK_SIZE = 100;
-    function makeChunkedArrayFromArray(items) {
-      const chunked = [];
-      for (let i = 0; i < items.length; i += CHUNK_SIZE) {
-        chunked.push(items.slice(i, i + CHUNK_SIZE));
-      }
-      return chunked;
-    }
-    try {
-      const ret = await plugin2.replicator.connectRemoteCouchDBWithSetting(plugin2.settings, plugin2.isMobile);
-      if (typeof ret === "string") {
-        Logger(`Connect error: ${ret}`, LOG_LEVEL.NOTICE, "clean-up-db");
-        return;
-      }
-      const info2 = ret.info;
-      Logger(JSON.stringify(info2), LOG_LEVEL.VERBOSE, "clean-up-db");
-      Logger(`Database active-size: ${sizeToHumanReadable(getSize(info2, "active"))}, external-size:${sizeToHumanReadable(getSize(info2, "external"))}, file-size: ${sizeToHumanReadable(getSize(info2, "file"))}`, LOG_LEVEL.NOTICE);
-      if (!dryRun) {
-        Logger(`The remote database has been locked for garbage collection`, LOG_LEVEL.NOTICE, "clean-up-db");
-        await plugin2.markRemoteLocked(true);
-      }
-      Logger(`Gathering chunk usage information`, LOG_LEVEL.NOTICE, "clean-up-db");
-      const db = ret.db;
-      const { unreferenced, missing } = await gatherChunkUsage(db);
-      if (missing.size != 0) {
-        Logger(`Some chunks are not found! We have to rescue`, LOG_LEVEL.NOTICE);
-        Logger(missing, LOG_LEVEL.VERBOSE);
-      } else {
-        Logger(`All chunks are OK`, LOG_LEVEL.NOTICE);
-      }
-      const payload = {};
-      for (const [id, rev2] of unreferenced) {
-        payload[id] = [rev2];
-      }
-      const removeItems = Object.keys(payload).length;
-      if (removeItems == 0) {
-        Logger(`No unreferenced chunk found (Remote)`, LOG_LEVEL.NOTICE);
-        return;
-      }
-      if (dryRun) {
-        Logger(`There are ${removeItems} unreferenced chunks (Remote)`, LOG_LEVEL.NOTICE);
-        return;
-      }
-      Logger(`Deleting unreferenced chunks: ${removeItems}`, LOG_LEVEL.NOTICE, "clean-up-db");
-      const buffer = makeChunkedArrayFromArray(Object.entries(payload));
-      for (const chunkedPayload of buffer) {
-        const rets = await _requestToCouchDBFetch(
-          `${plugin2.settings.couchDB_URI}/${plugin2.settings.couchDB_DBNAME}`,
-          plugin2.settings.couchDB_USER,
-          plugin2.settings.couchDB_PASSWORD,
-          "_purge",
-          chunkedPayload.reduce((p, c) => ({ ...p, [c[0]]: c[1] }), {}),
-          "POST"
-        );
-        Logger(JSON.stringify(await rets.json()), LOG_LEVEL.VERBOSE);
-      }
-      Logger(`Compacting database...`, LOG_LEVEL.NOTICE, "clean-up-db");
-      await db.compact();
-      const endInfo = await db.info();
-      Logger(`Processed database active-size: ${sizeToHumanReadable(getSize(endInfo, "active"))}, external-size:${sizeToHumanReadable(getSize(endInfo, "external"))}, file-size: ${sizeToHumanReadable(getSize(endInfo, "file"))}`, LOG_LEVEL.NOTICE);
-      Logger(`Reduced sizes: active-size: ${sizeToHumanReadable(getSize(info2, "active") - getSize(endInfo, "active"))}, external-size:${sizeToHumanReadable(getSize(info2, "external") - getSize(endInfo, "external"))}, file-size: ${sizeToHumanReadable(getSize(info2, "file") - getSize(endInfo, "file"))}`, LOG_LEVEL.NOTICE);
-      Logger(JSON.stringify(endInfo), LOG_LEVEL.VERBOSE, "clean-up-db");
-      Logger(`Local database cleaning up...`);
-      await localDatabaseCleanUp(plugin2, true, false);
-    } catch (ex) {
-      Logger("Failed to clean up db.");
-      Logger(ex, LOG_LEVEL.VERBOSE);
-    }
-  });
-};
 
 // src/ObsidianLiveSyncSettingTab.ts
 var ObsidianLiveSyncSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -20309,8 +20405,8 @@ var ObsidianLiveSyncSettingTab = class extends import_obsidian.PluginSettingTab 
     const containerInformationEl = containerEl.createDiv();
     const h3El = containerInformationEl.createEl("h3", { text: "Updates" });
     const informationDivEl = containerInformationEl.createEl("div", { text: "" });
-    const manifestVersion = "0.19.12";
-    const updateInformation = "### 0.19.0\n\n#### Customization sync\n\nSince `Plugin and their settings` have been broken, so I tried to fix it, not just fix it, but fix it the way it should be.\n\nNow, we have `Customization sync`.\n\nIt is a real shame that the compatibility between these features has been broken. However, this new feature is surely useful and I believe that worth getting over the pain.\nWe can use the new feature with the same configuration. Only the menu on the command palette has been changed. The dialog can be opened by `Show customization sync dialog`.\n\nI hope you will give it a try.\n\n\n#### Minors\n\n- 0.19.1 to 0.19.6 has been moved into the updates_old.md\n- 0.19.7\n  - Fixed:\n    - The initial pane of Setting dialogue is now changed to General Settings.\n    - The Setup Wizard is now able to flush existing settings and get into the mode again.\n- 0.19.8\n  - New feature:\n    - Vault history: A tab has been implemented to give a birds-eye view of the changes that have occurred in the vault.\n  - Improved:\n    - Now the passphrases on the dialogue masked out. Thank you @antoKeinanen!\n    - Log dialogue is now shown as one of tabs.\n  - Fixed:\n    - Some minor issues has been fixed.\n- 0.19.9\n  - New feature (For fixing a problem):\n    - We can fix the database obfuscated and plain paths that have been mixed up.\n  - Improvements\n    - Customisation Sync performance has been improved.\n- 0.19.10\n  - Fixed\n    - Fixed the issue about fixing the database.\n- 0.19.11\n  - Improvements:\n    - Hashing ChunkID has been improved.\n    - Logging keeps 400 lines now.\n  - Refactored:\n    - Import statement has been fixed about types.\n\n... To continue on to `updates_old.md`.\n";
+    const manifestVersion = "0.19.15";
+    const updateInformation = "### 0.19.0\n\n#### Customization sync\n\nSince `Plugin and their settings` have been broken, so I tried to fix it, not just fix it, but fix it the way it should be.\n\nNow, we have `Customization sync`.\n\nIt is a real shame that the compatibility between these features has been broken. However, this new feature is surely useful and I believe that worth getting over the pain.\nWe can use the new feature with the same configuration. Only the menu on the command palette has been changed. The dialog can be opened by `Show customization sync dialog`.\n\nI hope you will give it a try.\n\n\n#### Minors\n\n- 0.19.1 to 0.19.11 has been moved into the updates_old.md\n- 0.19.12\n  - Improved:\n    - Boot-up performance has been improved.\n    - Customisation sync performance has been improved.\n    - Synchronising performance has been improved.\n- 0.19.13\n  - Implemented:\n    - Database clean-up is now in beta 2!\n      We can shrink the remote database by deleting unused chunks, with keeping history.\n      Note: Local database is not cleaned up totally. We have to `Fetch` again to let it done.\n      **Note2**: Still in beta. Please back your vault up anything before.\n  - Fixed:\n    - The log updates are not thinned out now.\n- 0.19.14\n  - Fixed:\n    - Internal documents are now ignored.\n    - Merge dialogue now respond immediately to button pressing.\n    - Periodic processing now works fine.\n    - The checking interval of detecting conflicted has got shorter.\n    - Replication is now cancelled while cleaning up.\n    - The database locking by the cleaning up is now carefully unlocked.\n    - Missing chunks message is correctly reported.\n  - New feature:\n    - Suspend database reflecting has been implemented.\n      - This can be disabled by `Fetch database with previous behaviour`.\n    - Now fetch suspends the reflecting database and storage changes temporarily to improve the performance.\n    - We can choose the action when the remote database has been cleaned\n    - Merge dialogue now show `\u21B2` before the new line.\n  - Improved:\n    - Now progress is reported while the cleaning up and fetch process.\n    - Cancelled replication is now detected.\n- 0.19.15\n  - Fixed:\n    - Now storing files after cleaning up is correct works.\n  - Improved:\n    - Cleaning the local database up got incredibly fastened.\n      Now we can clean instead of fetching again when synchronising with the remote which has been cleaned up.\n\n... To continue on to `updates_old.md`.\n";
     const lastVersion = ~~(versionNumberString2Number(manifestVersion) / 1e3);
     const tmpDiv = createSpan();
     tmpDiv.addClass("sls-header-button");
@@ -21419,6 +21515,22 @@ ${file.path}`, LOG_LEVEL.NOTICE, "verify");
       (toggle) => toggle.setValue(this.plugin.settings.suspendFileWatching).onChange(async (value) => {
         this.plugin.settings.suspendFileWatching = value;
         await this.plugin.saveSettings();
+        scheduleTask("configReload", 250, async () => {
+          if (await askYesNo(this.app, "Do you want to restart and reload Obsidian now?") == "yes") {
+            this.app.commands.executeCommandById("app:reload");
+          }
+        });
+      })
+    );
+    new import_obsidian.Setting(containerHatchEl).setName("Suspend database reflecting").setDesc("Stop reflecting database changes to storage files.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.suspendParseReplicationResult).onChange(async (value) => {
+        this.plugin.settings.suspendParseReplicationResult = value;
+        await this.plugin.saveSettings();
+        scheduleTask("configReload", 250, async () => {
+          if (await askYesNo(this.app, "Do you want to restart and reload Obsidian now?") == "yes") {
+            this.app.commands.executeCommandById("app:reload");
+          }
+        });
       })
     );
     new import_obsidian.Setting(containerHatchEl).setName("Write logs into the file").setDesc("Warning! This will have a serious impact on performance. And the logs will not be synchronised under the default name. Please be careful with logs; they often contain your confidential information.").addToggle(
@@ -21495,6 +21607,12 @@ ${file.path}`, LOG_LEVEL.NOTICE, "verify");
         await this.plugin.saveSettings();
       })
     ).setClass("wizardHidden");
+    new import_obsidian.Setting(containerHatchEl).setName("Fetch database with previous behaviour").setDesc("").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.doNotSuspendOnFetching).onChange(async (value) => {
+        this.plugin.settings.doNotSuspendOnFetching = value;
+        await this.plugin.saveSettings();
+      })
+    );
     addScreenElement("50", containerHatchEl);
     const containerPluginSettings = containerEl.createDiv();
     containerPluginSettings.createEl("h3", { text: "Customization sync (beta)" });
@@ -21562,31 +21680,10 @@ ${file.path}`, LOG_LEVEL.NOTICE, "verify");
         await rebuildDB("remoteOnly");
       })
     );
-    new import_obsidian.Setting(containerMaintenanceEl).setName("(Beta) Clean the remote database").setDesc("").addButton(
-      (button) => button.setButtonText("Count").setDisabled(false).onClick(async () => {
-        await remoteDatabaseCleanup(this.plugin, true);
-      })
-    ).addButton(
-      (button) => button.setButtonText("Perform cleaning").setDisabled(false).setWarning().onClick(async () => {
-        this.plugin.app.setting.close();
-        await remoteDatabaseCleanup(this.plugin, false);
-        await balanceChunks(this.plugin, false);
-      })
-    );
     containerMaintenanceEl.createEl("h4", { text: "The local database" });
     new import_obsidian.Setting(containerMaintenanceEl).setName("Fetch rebuilt DB").setDesc("Restore or reconstruct local database from remote database.").addButton(
       (button) => button.setButtonText("Fetch").setWarning().setDisabled(false).onClick(async () => {
         await rebuildDB("localOnly");
-      })
-    );
-    new import_obsidian.Setting(containerMaintenanceEl).setName("(Beta) Clean the local database").setDesc("This feature requires disabling 'Use an old adapter for compatibility'").addButton(
-      (button) => button.setButtonText("Count").setDisabled(false).onClick(async () => {
-        await localDatabaseCleanUp(this.plugin, false, true);
-      })
-    ).addButton(
-      (button) => button.setButtonText("Perform cleaning").setDisabled(false).setWarning().onClick(async () => {
-        this.plugin.app.setting.close();
-        await localDatabaseCleanUp(this.plugin, false, false);
       })
     );
     new import_obsidian.Setting(containerMaintenanceEl).setName("Discard local database to reset or uninstall Self-hosted LiveSync").addButton(
@@ -21596,14 +21693,19 @@ ${file.path}`, LOG_LEVEL.NOTICE, "verify");
       })
     );
     containerMaintenanceEl.createEl("h4", { text: "Both databases" });
+    new import_obsidian.Setting(containerMaintenanceEl).setName("(Beta2) Clean up databases").setDesc("Delete unused chunks to shrink the database. This feature requires disabling 'Use an old adapter for compatibility'").addButton(
+      (button) => button.setButtonText("DryRun").setDisabled(false).onClick(async () => {
+        await this.plugin.dryRunGC();
+      })
+    ).addButton(
+      (button) => button.setButtonText("Perform cleaning").setDisabled(false).setWarning().onClick(async () => {
+        this.plugin.app.setting.close();
+        await this.plugin.dbGC();
+      })
+    );
     new import_obsidian.Setting(containerMaintenanceEl).setName("Rebuild everything").setDesc("Rebuild local and remote database with local files.").addButton(
       (button) => button.setButtonText("Rebuild").setWarning().setDisabled(false).onClick(async () => {
         await rebuildDB("rebuildBothByThisDevice");
-      })
-    );
-    new import_obsidian.Setting(containerMaintenanceEl).setName("(Beta) Complement each other with possible missing chunks.").setDesc("").addButton(
-      (button) => button.setButtonText("Balance").setWarning().setDisabled(false).onClick(async () => {
-        await balanceChunks(this.plugin, false);
       })
     );
     applyDisplayEnabled();
@@ -22385,7 +22487,7 @@ async function getDBEntryFromMeta(env, obj, opt, dump = false, waitForReady = tr
             } else {
               const chunkDocs = await env.localDatabase.allDocs({ keys: obj.children, include_docs: true });
               if (chunkDocs.rows.some((e3) => "error" in e3)) {
-                const missingChunks = chunkDocs.rows.filter((e3) => "error" in e3).map((e3) => e3.id).join(", ");
+                const missingChunks = chunkDocs.rows.filter((e3) => "error" in e3).map((e3) => e3.key).join(", ");
                 Logger(`Could not retrieve chunks of ${dispFilename}(${obj._id}). Chunks are missing:${missingChunks}`, LOG_LEVEL.NOTICE);
                 return false;
               }
@@ -23023,7 +23125,10 @@ var LiveSyncLocalDB = class {
     if (notExists.length > 0) {
       const chunks = await this.localDatabase.allDocs({ keys: notExists.map((e3) => e3.id), include_docs: true });
       const existChunks = chunks.rows.filter((e3) => !("error" in e3)).map((e3) => e3.doc);
-      const temp = existChunks.reduce((p, c) => ({ ...p, [c._id]: c.data }), {});
+      const nonExistsLocal = chunks.rows.filter((e3) => "error" in e3).map((e3) => e3.key);
+      const purgedChunks = await this.localDatabase.allDocs({ keys: nonExistsLocal.map((e3) => `_local/${e3}`), include_docs: true });
+      const existChunksPurged = purgedChunks.rows.filter((e3) => !("error" in e3)).map((e3) => ({ ...e3.doc, _id: e3.id.substring(7) }));
+      const temp = [...existChunks, ...existChunksPurged].reduce((p, c) => ({ ...p, [c._id]: c.data }), {});
       for (const chunk of existChunks) {
         this.hashCaches.set(chunk._id, chunk.data);
       }
@@ -23152,12 +23257,12 @@ var LiveSyncDBReplicator = class {
     this.controller.abort();
     this.controller = null;
   }
-  async openReplication(setting, keepAlive, showResult) {
+  async openReplication(setting, keepAlive, showResult, ignoreCleanLock = false) {
     await this.initializeDatabaseForReplication();
     if (keepAlive) {
       this.openContinuousReplication(setting, showResult, false);
     } else {
-      return this.openOneShotReplication(setting, showResult, false, "sync");
+      return this.openOneShotReplication(setting, showResult, false, "sync", ignoreCleanLock);
     }
   }
   replicationActivated(showResult) {
@@ -23213,7 +23318,7 @@ var LiveSyncDBReplicator = class {
     this.updateInfo();
     Logger("Replication paused", LOG_LEVEL.VERBOSE, "sync");
   }
-  async processSync(syncHandler, showResult, docSentOnStart, docArrivedOnStart, syncMode, retrying) {
+  async processSync(syncHandler, showResult, docSentOnStart, docArrivedOnStart, syncMode, retrying, reportCancelledAsDone = true) {
     const controller = new AbortController();
     if (this.controller) {
       this.controller.abort();
@@ -23288,7 +23393,10 @@ To solve the circumstance, configure the remote database correctly or we have to
             Logger(`Unexpected synchronization status:${JSON.stringify(e3)}`);
         }
       }
-      return "DONE";
+      if (reportCancelledAsDone) {
+        return "DONE";
+      }
+      return "CANCELLED";
     } catch (ex) {
       Logger(`Unexpected synchronization exception`);
       Logger(ex, LOG_LEVEL.VERBOSE);
@@ -23297,14 +23405,14 @@ To solve the circumstance, configure the remote database correctly or we have to
       this.controller = null;
     }
   }
-  async openOneShotReplication(setting, showResult, retrying, syncMode) {
+  async openOneShotReplication(setting, showResult, retrying, syncMode, ignoreCleanLock = false) {
     if (this.controller != null) {
       Logger("Replication is already in progress.", showResult ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO, "sync");
       return false;
     }
     const localDB = this.env.getDatabase();
     Logger(`OneShot Sync begin... (${syncMode})`);
-    const ret = await this.checkReplicationConnectivity(setting, true, retrying, showResult);
+    const ret = await this.checkReplicationConnectivity(setting, false, retrying, showResult, ignoreCleanLock);
     if (ret === false) {
       Logger("Could not connect to server.", showResult ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO, "sync");
       return false;
@@ -23331,16 +23439,19 @@ To solve the circumstance, configure the remote database correctly or we have to
     } else if (syncMode == "pushOnly") {
       syncHandler = localDB.replicate.to(db, { checkpoint: "target", ...syncOptionBase, ...setting.readChunksOnline ? { filter: "replicate/push" } : {} });
     }
-    const syncResult = await this.processSync(syncHandler, showResult, docSentOnStart, docArrivedOnStart, syncMode, retrying);
+    const syncResult = await this.processSync(syncHandler, showResult, docSentOnStart, docArrivedOnStart, syncMode, retrying, false);
     if (syncResult == "DONE") {
       return true;
+    }
+    if (syncResult == "CANCELLED") {
+      return false;
     }
     if (syncResult == "FAILED") {
       return false;
     }
     if (syncResult == "NEED_RESURRECT") {
       this.terminateSync();
-      return await this.openOneShotReplication(this.originalSetting, showResult, false, syncMode);
+      return await this.openOneShotReplication(this.originalSetting, showResult, false, syncMode, ignoreCleanLock);
     }
     if (syncResult == "NEED_RETRY") {
       const tempSetting = JSON.parse(JSON.stringify(setting));
@@ -23351,7 +23462,7 @@ To solve the circumstance, configure the remote database correctly or we have to
         return false;
       } else {
         Logger(`Retry with lower batch size:${tempSetting.batch_size}/${tempSetting.batches_limit}`, showResult ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO);
-        return await this.openOneShotReplication(tempSetting, showResult, true, syncMode);
+        return await this.openOneShotReplication(tempSetting, showResult, true, syncMode, ignoreCleanLock);
       }
     }
     return false;
@@ -23367,7 +23478,7 @@ To solve the circumstance, configure the remote database correctly or we have to
   replicateAllFromServer(setting, showingNotice) {
     return this.openOneShotReplication(setting, showingNotice, false, "pullOnly");
   }
-  async checkReplicationConnectivity(setting, keepAlive, skipCheck, showResult) {
+  async checkReplicationConnectivity(setting, keepAlive, skipCheck, showResult, ignoreCleanLock = false) {
     if (setting.versionUpFlash != "") {
       Logger("Open settings and check message, please.", LOG_LEVEL.NOTICE);
       return false;
@@ -23403,11 +23514,15 @@ To solve the circumstance, configure the remote database correctly or we have to
       } else if (ensure == "LOCKED") {
         this.remoteLocked = true;
       } else if (ensure == "NODE_CLEANED") {
-        Logger("The remote database has been cleaned up. Fetch rebuilt DB, explicit unlocking or chunk clean-up is required.", LOG_LEVEL.NOTICE);
-        this.remoteLockedAndDeviceNotAccepted = true;
-        this.remoteLocked = true;
-        this.remoteCleaned = true;
-        return false;
+        if (ignoreCleanLock) {
+          this.remoteLocked = true;
+        } else {
+          Logger("The remote database has been cleaned up. Fetch rebuilt DB, explicit unlocking or chunk clean-up is required.", LOG_LEVEL.NOTICE);
+          this.remoteLockedAndDeviceNotAccepted = true;
+          this.remoteLocked = true;
+          this.remoteCleaned = true;
+          return false;
+        }
       }
     }
     const syncOptionBase = {
@@ -24755,6 +24870,27 @@ Of course, we are able to disable these features.`;
     this.plugin.settings.syncOnFileOpen = false;
     this.plugin.settings.syncAfterMerge = false;
   }
+  async suspendReflectingDatabase() {
+    if (this.plugin.settings.doNotSuspendOnFetching)
+      return;
+    Logger(`Suspending reflection: Database and storage changes will not be reflected in each other until completely finished the fetching.`, LOG_LEVEL.NOTICE);
+    this.plugin.settings.suspendParseReplicationResult = true;
+    this.plugin.settings.suspendFileWatching = true;
+    await this.plugin.saveSettings();
+  }
+  async resumeReflectingDatabase() {
+    if (this.plugin.settings.doNotSuspendOnFetching)
+      return;
+    Logger(`Database and storage reflection has been resumed!`, LOG_LEVEL.NOTICE);
+    this.plugin.settings.suspendParseReplicationResult = false;
+    this.plugin.settings.suspendFileWatching = false;
+    await this.plugin.saveSettings();
+    if (this.plugin.settings.readChunksOnline) {
+      await this.plugin.syncAllFiles(true);
+      await this.plugin.loadQueuedFiles();
+      this.plugin.procQueuedFiles();
+    }
+  }
   async askUseNewAdapter() {
     if (!this.plugin.settings.useIndexedDBAdapter) {
       const message = `Now this plugin has been configured to use the old database adapter for keeping compatibility. Do you want to deactivate it?`;
@@ -24767,9 +24903,22 @@ Of course, we are able to disable these features.`;
       }
     }
   }
+  async fetchRemoteChunks() {
+    if (!this.plugin.settings.doNotSuspendOnFetching && this.plugin.settings.readChunksOnline) {
+      Logger(`Fetching chunks`, LOG_LEVEL.NOTICE);
+      const remoteDB = await this.plugin.getReplicator().connectRemoteCouchDBWithSetting(this.settings, this.plugin.getIsMobile(), true);
+      if (typeof remoteDB == "string") {
+        Logger(remoteDB, LOG_LEVEL.NOTICE);
+      } else {
+        await fetchAllUsedChunks(this.localDatabase.localDatabase, remoteDB.db);
+      }
+      Logger(`Fetching chunks done`, LOG_LEVEL.NOTICE);
+    }
+  }
   async fetchLocal() {
     this.suspendExtraSync();
     this.askUseNewAdapter();
+    await this.suspendReflectingDatabase();
     await this.plugin.realizeSettingSyncMode();
     await this.plugin.resetLocalDatabase();
     await delay(1e3);
@@ -24780,6 +24929,8 @@ Of course, we are able to disable these features.`;
     await this.plugin.replicateAllFromServer(true);
     await delay(1e3);
     await this.plugin.replicateAllFromServer(true);
+    await this.fetchRemoteChunks();
+    await this.resumeReflectingDatabase();
     await this.askHiddenFileConfiguration({ enableFetch: true });
   }
   async rebuildRemote() {
@@ -26277,6 +26428,7 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
   createPouchDBInstance(name, options) {
     if (this.settings.useIndexedDBAdapter) {
       options.adapter = "indexeddb";
+      options.purged_infos_limit = 1;
       return new index_es_default(name + "-indexeddb", options);
     }
     return new index_es_default(name, options);
@@ -26440,10 +26592,12 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
           Logger(`${FLAGMD_REDFLAG3} has been detected! Self-hosted LiveSync will discard the local database and fetch everything from the remote once again.`, LOG_LEVEL.NOTICE);
           await this.addOnSetup.fetchLocal();
           await this.deleteRedFlag3();
-          if (await askYesNo(this.app, "Do you want to disable Suspend file watching and restart obsidian now?") == "yes") {
-            this.settings.suspendFileWatching = false;
-            await this.saveSettings();
-            this.app.commands.executeCommandById("app:reload");
+          if (this.settings.suspendFileWatching) {
+            if (await askYesNo(this.app, "Do you want to disable Suspend file watching and restart obsidian now?") == "yes") {
+              this.settings.suspendFileWatching = false;
+              await this.saveSettings();
+              this.app.commands.executeCommandById("app:reload");
+            }
           }
         } else {
           this.settings.writeLogToTheFile = true;
@@ -26455,6 +26609,9 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
       } else {
         if (this.settings.suspendFileWatching) {
           Logger("'Suspend file watching' turned on. Are you sure this is what you intended? Every modification on the vault will be ignored.", LOG_LEVEL.NOTICE);
+        }
+        if (this.settings.suspendParseReplicationResult) {
+          Logger("'Suspend database reflecting' turned on. Are you sure this is what you intended? Every replicated change will be postponed until disabling this option.", LOG_LEVEL.NOTICE);
         }
         const isInitialized = await this.initializeDatabase(false, false);
         if (!isInitialized) {
@@ -26493,8 +26650,8 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
   async onload() {
     logStore.subscribe((e3) => this.addLog(e3.message, e3.level, e3.key));
     Logger("loading plugin");
-    const manifestVersion = "0.19.12";
-    const packageVersion = "0.19.12";
+    const manifestVersion = "0.19.15";
+    const packageVersion = "0.19.15";
     this.manifestVersion = manifestVersion;
     this.packageVersion = packageVersion;
     Logger(`Self-hosted LiveSync v${manifestVersion} ${packageVersion} `);
@@ -27259,12 +27416,14 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
     localStorage.setItem(lsKey, saveData);
   }
   async loadQueuedFiles() {
-    const lsKey = "obsidian-livesync-queuefiles-" + this.getVaultName();
-    const ids = JSON.parse(localStorage.getItem(lsKey) || "[]");
-    const ret = await this.localDatabase.allDocsRaw({ keys: ids, include_docs: true });
-    for (const doc of ret.rows) {
-      if (doc.doc && !this.queuedFiles.some((e3) => e3.entry._id == doc.doc._id)) {
-        await this.parseIncomingDoc(doc.doc);
+    if (!this.settings.suspendParseReplicationResult) {
+      const lsKey = "obsidian-livesync-queuefiles-" + this.getVaultName();
+      const ids = [...new Set(JSON.parse(localStorage.getItem(lsKey) || "[]"))];
+      const ret = await this.localDatabase.allDocsRaw({ keys: ids, include_docs: true });
+      for (const doc of ret.rows) {
+        if (doc.doc && !this.queuedFiles.some((e3) => e3.entry._id == doc.doc._id)) {
+          await this.parseIncomingDoc(doc.doc);
+        }
       }
     }
   }
@@ -27326,6 +27485,7 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
       return;
     const ignoreFiles = [
       "_design/replicate",
+      "_design/chunks",
       FLAGMD_REDFLAG,
       FLAGMD_REDFLAG2,
       FLAGMD_REDFLAG3
@@ -27371,20 +27531,39 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
     L1:
       for (const change of docsSorted) {
         if (isChunk(change._id)) {
-          await this.parseIncomingChunk(change);
+          if (!this.settings.suspendParseReplicationResult) {
+            await this.parseIncomingChunk(change);
+          }
           continue;
         }
-        for (const proc of this.addOns) {
-          if (await proc.parseReplicationResultItem(change)) {
-            continue L1;
+        if (!this.settings.suspendParseReplicationResult) {
+          for (const proc of this.addOns) {
+            if (await proc.parseReplicationResultItem(change)) {
+              continue L1;
+            }
           }
         }
         if (change._id == SYNCINFO_ID) {
           continue;
         }
-        if (change.type != "leaf" && change.type != "versioninfo" && change.type != "milestoneinfo" && change.type != "nodeinfo") {
-          await this.parseIncomingDoc(change);
+        if (change._id.startsWith("_design")) {
           continue;
+        }
+        if (change.type != "leaf" && change.type != "versioninfo" && change.type != "milestoneinfo" && change.type != "nodeinfo") {
+          if (this.settings.suspendParseReplicationResult) {
+            const newQueue = {
+              entry: change,
+              missingChildren: [],
+              timeout: 0
+            };
+            Logger(`Processing scheduled: ${change.path}`, LOG_LEVEL.INFO);
+            this.queuedFiles.push(newQueue);
+            this.saveQueuedFiles();
+            continue;
+          } else {
+            await this.parseIncomingDoc(change);
+            continue;
+          }
         }
         if (change.type == "versioninfo") {
           if (change.version > VER) {
@@ -27493,18 +27672,16 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
     const newMsg = typeof message == "string" ? message : this.lastMessage;
     const newLog = typeof log2 == "string" ? log2 : this.lastLog;
     if (`${this.lastMessage}-${this.lastLog}` != `${newMsg}-${newLog}`) {
-      scheduleTask("update-display", 50, () => {
-        this.statusBar.setText(newMsg.split("\n")[0]);
-        if (this.settings.showStatusOnEditor) {
-          const root = activeDocument.documentElement;
-          const q = root.querySelectorAll(`.CodeMirror-wrap,.cm-s-obsidian>.cm-editor,.canvas-wrapper`);
-          q.forEach((e3) => e3.setAttr("data-log", newMsg + "\n" + newLog));
-        } else {
-          const root = activeDocument.documentElement;
-          const q = root.querySelectorAll(`.CodeMirror-wrap,.cm-s-obsidian>.cm-editor,.canvas-wrapper`);
-          q.forEach((e3) => e3.setAttr("data-log", ""));
-        }
-      }, true);
+      this.statusBar.setText(newMsg.split("\n")[0]);
+      if (this.settings.showStatusOnEditor) {
+        const root = activeDocument.documentElement;
+        const q = root.querySelectorAll(`.CodeMirror-wrap,.cm-s-obsidian>.cm-editor,.canvas-wrapper`);
+        q.forEach((e3) => e3.setAttr("data-log", newMsg + "\n" + newLog));
+      } else {
+        const root = activeDocument.documentElement;
+        const q = root.querySelectorAll(`.CodeMirror-wrap,.cm-s-obsidian>.cm-editor,.canvas-wrapper`);
+        q.forEach((e3) => e3.setAttr("data-log", ""));
+      }
       scheduleTask("log-hide", 3e3, () => this.setStatusBarText(null, ""));
       this.lastMessage = newMsg;
       this.lastLog = newLog;
@@ -27515,8 +27692,12 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
   async replicate(showMessage) {
     if (!this.isReady)
       return;
+    if (isLockAcquired("cleanup")) {
+      Logger("Database cleaning up is in process. replication has been cancelled", LOG_LEVEL.NOTICE);
+      return;
+    }
     if (this.settings.versionUpFlash != "") {
-      Logger("Open settings and check message, please.", LOG_LEVEL.NOTICE);
+      Logger("Open settings and check message, please. replication has been cancelled.", LOG_LEVEL.NOTICE);
       return;
     }
     await this.applyBatchChange();
@@ -27526,22 +27707,40 @@ var ObsidianLiveSyncPlugin = class extends import_obsidian.Plugin {
     if (!ret) {
       if (this.replicator.remoteLockedAndDeviceNotAccepted) {
         if (this.replicator.remoteCleaned) {
-          const message = `
-The remote database has been cleaned up.
-To synchronize, this device must also be cleaned up or fetch everything again once.
-Fetching may takes some time. Cleaning up is not stable yet but fast.
-`;
-          const CHOICE_CLEANUP = "Clean up";
-          const CHOICE_FETCH = "Fetch again";
-          const CHOICE_DISMISS = "Dismiss";
-          const ret2 = await confirmWithMessage(this, "Locked", message, [CHOICE_CLEANUP, CHOICE_FETCH, CHOICE_DISMISS], CHOICE_DISMISS, 10);
-          if (ret2 == CHOICE_CLEANUP) {
-            await localDatabaseCleanUp(this, true, false);
-            await balanceChunks(this, false);
-          }
-          if (ret2 == CHOICE_FETCH) {
-            await performRebuildDB(this, "localOnly");
-          }
+          Logger(`The remote database has been cleaned.`, showMessage ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO);
+          await runWithLock("cleanup", true, async () => {
+            const count = await purgeUnreferencedChunks(this.localDatabase.localDatabase, true);
+            const message = `The remote database has been cleaned up.
+To synchronize, this device must be also cleaned up. ${count} chunk(s) will be erased from this device.
+However, If there are many chunks to be deleted, maybe fetching again is faster.
+We will lose the history of this device if we fetch the remote database again.
+Even if you choose to clean up, you will see this option again if you exit Obsidian and then synchronise again.`;
+            const CHOICE_FETCH = "Fetch again";
+            const CHOICE_CLEAN = "Cleanup";
+            const CHOICE_DISMISS = "Dismiss";
+            const ret2 = await confirmWithMessage(this, "Cleaned", message, [CHOICE_FETCH, CHOICE_CLEAN, CHOICE_DISMISS], CHOICE_DISMISS, 30);
+            if (ret2 == CHOICE_FETCH) {
+              await performRebuildDB(this, "localOnly");
+            }
+            if (ret2 == CHOICE_CLEAN) {
+              const remoteDB = await this.getReplicator().connectRemoteCouchDBWithSetting(this.settings, this.getIsMobile(), true);
+              if (typeof remoteDB == "string") {
+                Logger(remoteDB, LOG_LEVEL.NOTICE);
+                return false;
+              }
+              await purgeUnreferencedChunks(this.localDatabase.localDatabase, false);
+              this.localDatabase.hashCaches.clear();
+              if (await this.replicator.openReplication(this.settings, false, showMessage, true)) {
+                await balanceChunkPurgedDBs(this.localDatabase.localDatabase, remoteDB.db);
+                await purgeUnreferencedChunks(this.localDatabase.localDatabase, false);
+                this.localDatabase.hashCaches.clear();
+                await this.getReplicator().markRemoteResolved(this.settings);
+                Logger("The local database has been cleaned up.", showMessage ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO);
+              } else {
+                Logger("Replication has been cancelled. Please try it again.", showMessage ? LOG_LEVEL.NOTICE : LOG_LEVEL.INFO);
+              }
+            }
+          });
         } else {
           const message = `
 The remote database has been rebuilt.
@@ -28036,7 +28235,7 @@ Or if you are sure know what had been happened, we can unlock the database from 
             }
             setTimeout(() => {
               this.showIfConflicted(filename);
-            }, 500);
+            }, 50);
           } else if (toDelete == null) {
             Logger("Leave it still conflicted");
           } else {
@@ -28048,7 +28247,7 @@ Or if you are sure know what had been happened, we can unlock the database from 
             }
             setTimeout(() => {
               this.showIfConflicted(filename);
-            }, 500);
+            }, 50);
           }
           return res2(true);
         }).open();
@@ -28085,7 +28284,7 @@ Or if you are sure know what had been happened, we can unlock the database from 
         Logger("conflict:Automatically merged, but we have to check it again");
         setTimeout(() => {
           this.showIfConflicted(filename);
-        }, 500);
+        }, 50);
         return;
       }
       await this.showMergeDialog(filename, conflictCheckResult);
@@ -28323,5 +28522,33 @@ Or if you are sure know what had been happened, we can unlock the database from 
     } else if (typeof file == "string") {
       return this.localDatabase.isTargetFile(file);
     }
+  }
+  async dryRunGC() {
+    await runWithLock("cleanup", true, async () => {
+      const remoteDBConn = await this.getReplicator().connectRemoteCouchDBWithSetting(this.settings, this.isMobile);
+      if (typeof remoteDBConn == "string") {
+        Logger(remoteDBConn);
+        return;
+      }
+      await purgeUnreferencedChunks(remoteDBConn.db, true, this.settings, false);
+      await purgeUnreferencedChunks(this.localDatabase.localDatabase, true);
+      this.localDatabase.hashCaches.clear();
+    });
+  }
+  async dbGC() {
+    await runWithLock("cleanup", true, async () => {
+      this.getReplicator().markRemoteLocked(this.settings, true, true);
+      const remoteDBConn = await this.getReplicator().connectRemoteCouchDBWithSetting(this.settings, this.isMobile);
+      if (typeof remoteDBConn == "string") {
+        Logger(remoteDBConn);
+        return;
+      }
+      await purgeUnreferencedChunks(remoteDBConn.db, false, this.settings, true);
+      await purgeUnreferencedChunks(this.localDatabase.localDatabase, false);
+      this.localDatabase.hashCaches.clear();
+      await balanceChunkPurgedDBs(this.localDatabase.localDatabase, remoteDBConn.db);
+      this.localDatabase.refreshSettings();
+      Logger("The remote database has been cleaned up! Other devices will be cleaned up on the next synchronisation.");
+    });
   }
 };
