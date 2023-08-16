@@ -1,6 +1,6 @@
 {
   "format": "YYYY-MM-DD",
-  "folder": "3000_Daily",
-  "template": "1000_System/1100_Templates/daily",
+  "folder": "3000_Fleeting/3100_Daily",
+  "template": "1000_System/1100_Templates/01_Daily",
   "autorun": false
 }
