@@ -115,5 +115,15 @@
       ],
       "key": "R"
     }
+  ],
+  "zk-prefixer": [
+    {
+      "modifiers": [
+        "Alt",
+        "Mod",
+        "Shift"
+      ],
+      "key": "O"
+    }
   ]
 }

@@ -7,6 +7,11 @@
       "folder": "4000_StudyLogs",
       "tag": "#study_logs",
       "pattern": ""
+    },
+    {
+      "folder": "3000_Fleeting/3200_Unique",
+      "tag": "#fleeting",
+      "pattern": ""
     }
   ],
   "use_regex_to_check_for_excluded_folder": false,
