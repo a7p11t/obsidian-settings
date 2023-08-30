@@ -12,6 +12,16 @@
       "folder": "3000_Fleeting/3200_Unique",
       "tag": "#fleeting",
       "pattern": ""
+    },
+    {
+      "folder": "5000_Notes/5200_Vocabulary",
+      "tag": "#vocabulary",
+      "pattern": ""
+    },
+    {
+      "folder": "5000_Notes/5300_Azure",
+      "tag": "#azure",
+      "pattern": ""
     }
   ],
   "use_regex_to_check_for_excluded_folder": false,
