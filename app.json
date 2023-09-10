@@ -28,7 +28,7 @@
   "newLinkFormat": "absolute",
   "useMarkdownLinks": true,
   "showUnsupportedFiles": true,
-  "attachmentFolderPath": "./_attachments",
+  "attachmentFolderPath": "8000_Attachments",
   "userIgnoreFilters": [
     "1000_System",
     "9000_Old/"
