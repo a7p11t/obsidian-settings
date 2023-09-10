@@ -7,7 +7,8 @@
   "changeNoteBacklinksAlt": true,
   "ignoreFolders": [
     ".git/",
-    ".obsidian/"
+    ".obsidian/",
+    "9000_Workspace/"
   ],
   "ignoreFiles": [
     "consistant-report.md"
