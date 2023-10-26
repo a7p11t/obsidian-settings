@@ -1,0 +1,213 @@
+{
+  "workspaces": {
+    "single tab": {
+      "main": {
+        "id": "3e7bfae345057d9c",
+        "type": "split",
+        "children": [
+          {
+            "id": "bbd7ea90c4870807",
+            "type": "tabs",
+            "children": [
+              {
+                "id": "b93d7f3d2e17e6f4",
+                "type": "leaf",
+                "state": {
+                  "type": "empty",
+                  "state": {}
+                }
+              }
+            ]
+          }
+        ],
+        "direction": "vertical"
+      },
+      "left": {
+        "id": "45bf13c3c1efcf9f",
+        "type": "split",
+        "children": [
+          {
+            "id": "b203e53c11dd7cd2",
+            "type": "tabs",
+            "children": [
+              {
+                "id": "ae1e43ff1581a27d",
+                "type": "leaf",
+                "state": {
+                  "type": "file-explorer",
+                  "state": {
+                    "sortOrder": "alphabetical"
+                  }
+                }
+              },
+              {
+                "id": "b14dc3f6ff972bf0",
+                "type": "leaf",
+                "state": {
+                  "type": "search",
+                  "state": {
+                    "query": "プロジェクト報告書",
+                    "matchingCase": false,
+                    "explainSearch": false,
+                    "collapseAll": false,
+                    "extraContext": false,
+                    "sortOrder": "alphabetical"
+                  }
+                }
+              },
+              {
+                "id": "77e6108f32ca45ca",
+                "type": "leaf",
+                "state": {
+                  "type": "bookmarks",
+                  "state": {}
+                }
+              }
+            ]
+          }
+        ],
+        "direction": "horizontal",
+        "width": 325.5,
+        "collapsed": true
+      },
+      "right": {
+        "id": "2d529333b368b60e",
+        "type": "split",
+        "children": [
+          {
+            "id": "b73b3f99b8394c98",
+            "type": "tabs",
+            "children": [
+              {
+                "id": "be35c5f6fbaaee6e",
+                "type": "leaf",
+                "state": {
+                  "type": "backlink",
+                  "state": {
+                    "collapseAll": false,
+                    "extraContext": false,
+                    "sortOrder": "alphabetical",
+                    "showSearch": false,
+                    "searchQuery": "",
+                    "backlinkCollapsed": false,
+                    "unlinkedCollapsed": true
+                  }
+                }
+              },
+              {
+                "id": "65e173f383996bfe",
+                "type": "leaf",
+                "state": {
+                  "type": "outgoing-link",
+                  "state": {
+                    "linksCollapsed": false,
+                    "unlinkedCollapsed": true
+                  }
+                }
+              },
+              {
+                "id": "f96eed2a68fc9761",
+                "type": "leaf",
+                "state": {
+                  "type": "tag",
+                  "state": {
+                    "sortOrder": "frequency",
+                    "useHierarchy": true
+                  }
+                }
+              },
+              {
+                "id": "7d6480e733f72393",
+                "type": "leaf",
+                "state": {
+                  "type": "outline",
+                  "state": {}
+                }
+              },
+              {
+                "id": "9d7ac92fffff5102",
+                "type": "leaf",
+                "state": {
+                  "type": "all-properties",
+                  "state": {
+                    "sortOrder": "frequency"
+                  }
+                }
+              }
+            ],
+            "currentTab": 4
+          },
+          {
+            "id": "4322f720fc03f0c7",
+            "type": "tabs",
+            "children": [
+              {
+                "id": "dab6d844680f5050",
+                "type": "leaf",
+                "state": {
+                  "type": "graph",
+                  "state": {}
+                }
+              },
+              {
+                "id": "fc487e56e0c5794d",
+                "type": "leaf",
+                "state": {
+                  "type": "localgraph",
+                  "state": {
+                    "options": {
+                      "collapse-filter": true,
+                      "search": "",
+                      "localJumps": 1,
+                      "localBacklinks": true,
+                      "localForelinks": true,
+                      "localInterlinks": false,
+                      "showTags": true,
+                      "showAttachments": true,
+                      "hideUnresolved": false,
+                      "collapse-color-groups": true,
+                      "colorGroups": [],
+                      "collapse-display": true,
+                      "showArrow": false,
+                      "textFadeMultiplier": 0,
+                      "nodeSizeMultiplier": 1,
+                      "lineSizeMultiplier": 1,
+                      "collapse-forces": true,
+                      "centerStrength": 0.518713248970312,
+                      "repelStrength": 10,
+                      "linkStrength": 1,
+                      "linkDistance": 250,
+                      "scale": 0.18462326225858186,
+                      "close": false
+                    }
+                  }
+                }
+              }
+            ],
+            "currentTab": 1
+          }
+        ],
+        "direction": "horizontal",
+        "width": 300,
+        "collapsed": true
+      },
+      "left-ribbon": {
+        "hiddenItems": {
+          "obsidian-advanced-slides:Show Slide Preview": false,
+          "switcher:クイックスイッチャーを開く": false,
+          "graph:グラフビューを開く": false,
+          "daily-notes:今日のデイリーノートを開く": false,
+          "templates:テンプレートを挿入": false,
+          "command-palette:コマンドパレットを開く": false,
+          "zk-prefixer:新規ユニークノートの作成": false,
+          "random-note:ランダムノートを開く": false,
+          "workspaces:ワークスペースレイアウトを管理": false,
+          "obsidian-livesync:Replicate": false,
+          "obsidian-livesync:Show log": false
+        }
+      },
+      "active": "b93d7f3d2e17e6f4"
+    }
+  },
+  "active": "single tab"
+}
