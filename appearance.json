@@ -10,6 +10,7 @@
   "nativeMenus": false,
   "translucency": false,
   "enabledCssSnippets": [
-    "border"
+    "border",
+    "strong"
   ]
 }

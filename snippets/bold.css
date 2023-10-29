@@ -1,0 +1,4 @@
+/* Underline heading in Edit mode and Preview mode */
+body {
+  --bold-weight: var(--font-bold);
+}
