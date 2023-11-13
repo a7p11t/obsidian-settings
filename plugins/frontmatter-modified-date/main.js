@@ -31,7 +31,14 @@ var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   frontmatterProperty: "modified",
   momentFormat: "",
-  excludedFolders: []
+  excludedFolders: [],
+  useKeyupEvents: false,
+  onlyUpdateExisting: false,
+  timeout: 10,
+  excludeField: "exclude_modified_update",
+  appendField: "append_modified_update",
+  appendMaximumFrequency: "day"
+  // Append a maximum of 1 row per 'unit'
 };
 var FrontmatterModified = class extends import_obsidian.Plugin {
   constructor() {
@@ -40,16 +47,24 @@ var FrontmatterModified = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
-    this.registerEvent(this.app.vault.on("modify", (file) => {
-      if (file instanceof import_obsidian.TFile && this.settings.excludedFolders.every((folder) => !file.path.startsWith(folder + "/"))) {
-        clearTimeout(this.timer[file.path]);
-        this.timer[file.path] = setTimeout(() => {
-          this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-            frontmatter[this.settings.frontmatterProperty] = (0, import_obsidian.moment)().format(this.settings.momentFormat);
-          });
-        }, 12 * 1e3);
-      }
-    }));
+    if (!this.settings.useKeyupEvents) {
+      this.registerEvent(this.app.workspace.on("editor-change", (editor, info) => {
+        if (info.file instanceof import_obsidian.TFile) {
+          this.updateFrontmatter(info.file);
+        }
+      }));
+    } else if (this.settings.useKeyupEvents) {
+      this.registerDomEvent(document, "keyup", (ev) => {
+        if (!ev.ctrlKey && !ev.altKey && !ev.metaKey && /^.$/u.test(ev.key)) {
+          try {
+            if (ev.target.closest(".markdown-source-view .cm-editor")) {
+              this.updateFrontmatter(ev.view.app.workspace.activeEditor.file);
+            }
+          } catch (e) {
+          }
+        }
+      });
+    }
     this.addSettingTab(new FrontmatterModifiedSettingTab(this.app, this));
   }
   async loadSettings() {
@@ -57,6 +72,62 @@ var FrontmatterModified = class extends import_obsidian.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+  /**
+   * Use a timeout to update the metadata only once the user has stopped typing.
+   * If the user keeps typing, then it will reset the timeout and start again from zero.
+   *
+   * Obsidian doesn't appear to correctly handle this situation otherwise, and pops an
+   * error to say "<File> has been modified externally, merging changes automatically."
+   *
+   * @param {TFile} file
+   */
+  async updateFrontmatter(file) {
+    clearTimeout(this.timer[file.path]);
+    this.timer[file.path] = window.setTimeout(() => {
+      var _a, _b;
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (this.settings.onlyUpdateExisting && !((_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.hasOwnProperty(this.settings.frontmatterProperty))) {
+      } else if ((_b = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _b[this.settings.excludeField]) {
+      } else if (this.settings.excludedFolders.some((folder) => file.path.startsWith(folder + "/"))) {
+      } else {
+        this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+          const now = (0, import_obsidian.moment)();
+          const isAppendArray = frontmatter[this.settings.appendField] === true;
+          let secondsSinceLastUpdate = Infinity;
+          let previousEntryMoment;
+          if (frontmatter[this.settings.frontmatterProperty]) {
+            let previousEntry = frontmatter[this.settings.frontmatterProperty];
+            if (isAppendArray && Array.isArray(previousEntry)) {
+              previousEntry = previousEntry[previousEntry.length - 1];
+            }
+            previousEntryMoment = (0, import_obsidian.moment)(previousEntry, this.settings.momentFormat, true);
+            if (previousEntryMoment.isValid()) {
+              secondsSinceLastUpdate = now.diff(previousEntryMoment, "seconds");
+            }
+          }
+          if (secondsSinceLastUpdate > 30) {
+            let newEntry = now.format(this.settings.momentFormat);
+            if (isAppendArray) {
+              let entries = frontmatter[this.settings.frontmatterProperty] || [];
+              if (!Array.isArray(entries))
+                entries = [entries];
+              if (entries.length && previousEntryMoment) {
+                if (now.isSame(previousEntryMoment, this.settings.appendMaximumFrequency)) {
+                  entries[entries.length - 1] = newEntry;
+                } else {
+                  entries.push(newEntry);
+                }
+              } else {
+                entries.push(newEntry);
+              }
+              newEntry = entries;
+            }
+            frontmatter[this.settings.frontmatterProperty] = newEntry;
+          }
+        });
+      }
+    }, this.settings.timeout * 1e3);
   }
 };
 var FrontmatterModifiedSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -67,7 +138,6 @@ var FrontmatterModifiedSettingTab = class extends import_obsidian.PluginSettingT
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Update modified date settings" });
     new import_obsidian.Setting(containerEl).setName("Frontmatter property").setDesc("The name of the YAML/frontmatter property to update").addText((text) => text.setPlaceholder("modified").setValue(this.plugin.settings.frontmatterProperty).onChange(async (value) => {
       this.plugin.settings.frontmatterProperty = value;
       await this.plugin.saveSettings();
@@ -80,5 +150,22 @@ var FrontmatterModifiedSettingTab = class extends import_obsidian.PluginSettingT
       this.plugin.settings.excludedFolders = value.split("\n").map((x) => x.trim()).filter((x) => !!x);
       await this.plugin.saveSettings();
     }));
+    new import_obsidian.Setting(containerEl).setName("Only update existing fields").setDesc("If you turn this on, it will only update a frontmatter field *if that field already exists*.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.onlyUpdateExisting).onChange(async (value) => {
+        this.plugin.settings.onlyUpdateExisting = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Use typing events instead of Obsidian events").setDesc(`If you make changes to a file using an external editor and Obsidian is currently open, Obsidian
+will register this as a modification and update the frontmatter. If you don't want this to happen, and only
+want the frontmatter when you are making changes inside Obsidian, you can try this mode. It watches for typing 
+events, and then updates the frontmatter only when you type. This means that some events like updating your note 
+or properties using your mouse will not cause the modified field to update. You will need to restart Obsidian 
+after this change.`).addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.useKeyupEvents).onChange(async (value) => {
+        this.plugin.settings.useKeyupEvents = value;
+        await this.plugin.saveSettings();
+      });
+    });
   }
 };
