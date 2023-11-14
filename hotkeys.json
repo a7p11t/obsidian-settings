@@ -119,7 +119,6 @@
   "zk-prefixer": [
     {
       "modifiers": [
-        "Alt",
         "Mod",
         "Shift"
       ],
