@@ -1,5 +1,5 @@
 {
-  "folder": "3000_Fleeting/3200_Unique",
-  "template": "1000_System/1100_Templates/02_Fleeting",
+  "folder": "400_Fleeting/410_Active",
+  "template": "100_System/110_Templates/Fleeting",
   "format": "YYYYMMDDHHmm"
 }

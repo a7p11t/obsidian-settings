@@ -13,7 +13,11 @@
   "ignoreFiles": [
     "consistant-report.md"
   ],
+  "ignoreFilesRegex": [
+    {}
+  ],
   "attachmentsSubfolder": "_attachments",
-  "consistentReportFile": "1000_System/1200_Outputs/consistant-report.md",
-  "useBuiltInObsidianLinkCaching": false
+  "consistencyReportFile": "consistency-report.md",
+  "useBuiltInObsidianLinkCaching": false,
+  "consistentReportFile": "1000_System/1200_Outputs/consistant-report.md"
 }
